@@ -129,27 +129,27 @@ export default function ClientesPage() {
   };
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-4 sm:p-6 space-y-4 sm:space-y-6">
       <BreadcrumbNav items={[{ label: "Dashboard", href: "/dashboard" }, { label: "Clientes" }]} />
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold">Clientes</h1>
           <p className="text-gray-600">Gestiona los clientes del negocio.</p>
         </div>
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
           <DialogTrigger asChild>
-            <Button onClick={() => handleOpenDialog()}><Plus className="h-4 w-4 mr-2" />Nuevo Cliente</Button>
+            <Button onClick={() => handleOpenDialog()} className="w-full sm:w-auto"><Plus className="h-4 w-4 mr-2" />Nuevo Cliente</Button>
           </DialogTrigger>
-          <DialogContent className="max-w-lg">
+          <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>{editingCliente ? "Editar Cliente" : "Nuevo Cliente"}</DialogTitle>
             </DialogHeader>
             <div className="grid gap-4 py-4">
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div><Label>Nombre</Label><Input value={formData.nombre || ""} onChange={(e) => setFormData({ ...formData, nombre: e.target.value })} /></div>
                 <div><Label>Apellido</Label><Input value={formData.apellido || ""} onChange={(e) => setFormData({ ...formData, apellido: e.target.value })} /></div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div><Label>Tipo Documento</Label><Input value={formData.tipo_documento || ""} onChange={(e) => setFormData({ ...formData, tipo_documento: e.target.value })} /></div>
                 <div><Label>N° Documento</Label><Input value={formData.numero_documento || ""} onChange={(e) => setFormData({ ...formData, numero_documento: e.target.value })} /></div>
               </div>
@@ -178,20 +178,21 @@ export default function ClientesPage() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2"><User />Lista de Clientes</CardTitle>
-          <div className="flex items-center space-x-2 pt-4">
+          <div className="flex items-center space-x-2 pt-4 w-full sm:w-auto">
             <Search className="h-5 w-5 text-gray-400" />
-            <Input placeholder="Buscar por nombre, documento, email..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="max-w-sm" />
+            <Input placeholder="Buscar por nombre, documento, email..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full sm:max-w-sm" />
           </div>
         </CardHeader>
         <CardContent>
-          <Table>
+          <div className="overflow-x-auto">
+            <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Nombre Completo</TableHead>
-                <TableHead>Documento</TableHead>
-                <TableHead>Email</TableHead>
-                <TableHead>Tipo</TableHead>
-                <TableHead>Acciones</TableHead>
+                <TableHead className="min-w-[150px]">Nombre Completo</TableHead>
+                <TableHead className="hidden sm:table-cell">Documento</TableHead>
+                <TableHead className="hidden md:table-cell">Email</TableHead>
+                <TableHead className="min-w-[80px]">Tipo</TableHead>
+                <TableHead className="min-w-[100px]">Acciones</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -200,15 +201,15 @@ export default function ClientesPage() {
               ) : filteredClientes.length > 0 ? (
                 filteredClientes.map((cliente) => (
                   <TableRow key={cliente.id}>
-                    <TableCell className="font-medium">{cliente.apellido}, {cliente.nombre}</TableCell>
-                    <TableCell>{cliente.numero_documento}</TableCell>
-                    <TableCell>{cliente.correo_electronico}</TableCell>
-                    <TableCell><Badge variant={cliente.tipo_cliente === 'mayorista' ? 'default' : 'secondary'}>{cliente.tipo_cliente}</Badge></TableCell>
+                    <TableCell className="font-medium truncate">{cliente.apellido}, {cliente.nombre}</TableCell>
+                    <TableCell className="hidden sm:table-cell">{cliente.numero_documento}</TableCell>
+                    <TableCell className="hidden md:table-cell truncate max-w-[150px]">{cliente.correo_electronico}</TableCell>
+                    <TableCell><Badge variant={cliente.tipo_cliente === 'mayorista' ? 'default' : 'secondary'} className="text-xs">{cliente.tipo_cliente}</Badge></TableCell>
                     <TableCell>
-                      <div className="flex items-center gap-2">
-                        <Button variant="outline" size="icon" onClick={() => handleOpenDialog(cliente)}><Edit className="h-4 w-4" /></Button>
+                      <div className="flex items-center gap-1 sm:gap-2">
+                        <Button variant="outline" size="sm" onClick={() => handleOpenDialog(cliente)} className="p-2"><Edit className="h-3 w-3 sm:h-4 sm:w-4" /><span className="hidden sm:inline ml-1">Editar</span></Button>
                         <AlertDialog>
-                          <AlertDialogTrigger asChild><Button variant="destructive" size="icon"><Trash2 className="h-4 w-4" /></Button></AlertDialogTrigger>
+                          <AlertDialogTrigger asChild><Button variant="destructive" size="sm" className="p-2"><Trash2 className="h-3 w-3 sm:h-4 sm:w-4" /><span className="hidden sm:inline ml-1">Eliminar</span></Button></AlertDialogTrigger>
                           <AlertDialogContent>
                             <AlertDialogHeader><AlertDialogTitle>¿Eliminar cliente?</AlertDialogTitle></AlertDialogHeader>
                             <AlertDialogDescription>Esta acción no se puede deshacer.</AlertDialogDescription>
@@ -227,6 +228,7 @@ export default function ClientesPage() {
               )}
             </TableBody>
           </Table>
+          </div>
         </CardContent>
       </Card>
     </div>

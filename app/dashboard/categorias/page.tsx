@@ -128,7 +128,7 @@ export default function CategoriasPage() {
   };
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-4 sm:p-6 space-y-4 sm:space-y-6">
       <BreadcrumbNav
         items={[
           { label: "Fiambrería San Agustín", href: "/dashboard" },
@@ -137,7 +137,7 @@ export default function CategoriasPage() {
         ]}
       />
 
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold text-gray-900">Categorías</h1>
           <p className="text-gray-600">Gestiona las categorías de productos</p>
@@ -190,7 +190,7 @@ export default function CategoriasPage() {
         </Dialog>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
         <Card className="border-l-4 border-l-blue-500">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <div>
@@ -208,44 +208,44 @@ export default function CategoriasPage() {
             Lista de Categorías
           </CardTitle>
           <CardDescription>Total de categorías: {categorias.length}</CardDescription>
-          <div className="flex items-center space-x-4">
-            <div className="flex items-center space-x-2">
-              <Search className="h-4 w-4 text-gray-400" />
-              <Input
-                placeholder="Buscar categorías..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="max-w-sm"
-              />
-            </div>
-            
+          <div className="flex items-center space-x-2 w-full sm:w-auto">
+            <Search className="h-4 w-4 text-gray-400" />
+            <Input
+              placeholder="Buscar categorías..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full sm:max-w-sm"
+            />
           </div>
         </CardHeader>
         <CardContent>
-          <Table>
+          <div className="overflow-x-auto">
+            <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Nombre</TableHead>
-                <TableHead>Descripción</TableHead>
-                <TableHead>Productos</TableHead>
-                <TableHead>Acciones</TableHead>
+                <TableHead className="min-w-[120px]">Nombre</TableHead>
+                <TableHead className="hidden sm:table-cell">Descripción</TableHead>
+                <TableHead className="min-w-[80px]">Productos</TableHead>
+                <TableHead className="min-w-[100px]">Acciones</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {filteredCategorias.map((categoria) => (
                 <TableRow key={categoria.id}>
                   <TableCell className="font-medium">{categoria.nombre}</TableCell>
-                  <TableCell>{categoria.descripcion}</TableCell>
+                  <TableCell className="hidden sm:table-cell truncate max-w-[200px]">{categoria.descripcion}</TableCell>
                   <TableCell>{categoria.productos[0]?.count ?? 0}</TableCell>
                   <TableCell>
-                    <div className="flex items-center gap-2">
-                      <Button variant="outline" size="icon" onClick={() => handleOpenDialog(categoria)}>
-                        <Edit className="h-4 w-4" />
+                    <div className="flex items-center gap-1 sm:gap-2">
+                      <Button variant="outline" size="sm" onClick={() => handleOpenDialog(categoria)} className="p-2">
+                        <Edit className="h-3 w-3 sm:h-4 sm:w-4" />
+                        <span className="hidden sm:inline ml-1">Editar</span>
                       </Button>
                       <AlertDialog>
                         <AlertDialogTrigger asChild>
-                          <Button variant="outline" size="icon">
-                            <Trash2 className="h-4 w-4" />
+                          <Button variant="outline" size="sm" className="p-2">
+                            <Trash2 className="h-3 w-3 sm:h-4 sm:w-4" />
+                            <span className="hidden sm:inline ml-1">Eliminar</span>
                           </Button>
                         </AlertDialogTrigger>
                         <AlertDialogContent>
@@ -273,6 +273,7 @@ export default function CategoriasPage() {
               ))}
             </TableBody>
           </Table>
+          </div>
         </CardContent>
       </Card>
     </div>

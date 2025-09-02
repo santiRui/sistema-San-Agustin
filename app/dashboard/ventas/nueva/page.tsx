@@ -412,7 +412,7 @@ export default function RealizarVentaPage() {
   const selectedCliente = clientes.find(c => c.id === clienteId);
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-4 sm:p-6 space-y-4 sm:space-y-6">
       <BreadcrumbNav
         items={[
           { label: "Dashboard", href: "/dashboard" },
@@ -426,14 +426,14 @@ export default function RealizarVentaPage() {
         <p className="text-gray-600">Crear una nueva transacción de venta</p>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 space-y-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6">
+        <div className="lg:col-span-2 space-y-4 sm:space-y-6">
           <Card>
             <CardHeader>
               <CardTitle>Información de la Venta</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <Label htmlFor="cliente">Cliente</Label>
                   <Select value={clienteId || ''} onValueChange={setClienteId}>
@@ -467,7 +467,7 @@ export default function RealizarVentaPage() {
             </CardContent>
           </Card>
 
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Panel de Agregar Productos */}
             <Card>
               <CardHeader>
@@ -495,7 +495,7 @@ export default function RealizarVentaPage() {
                       </p>
                     )}
                   </div>
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                       <Label htmlFor="unidadMedida">Unidad</Label>
                       <Select 
@@ -561,36 +561,36 @@ export default function RealizarVentaPage() {
               </CardHeader>
               <CardContent>
                 {lecturasBalanza.filter(lectura => lectura.producto_id && lectura.precio_por_unidad).length === 0 ? (
-                  <div className="text-center py-8 text-gray-500">
-                    <Weight className="h-12 w-12 mx-auto mb-2 text-gray-300" />
-                    <p>No hay pesajes con productos asociados disponibles</p>
+                  <div className="text-center py-6 text-gray-500">
+                    <Weight className="h-8 w-8 mx-auto mb-2 text-gray-300" />
+                    <p className="text-sm">No hay pesajes disponibles</p>
                   </div>
                 ) : (
-                  <div className="space-y-3 max-h-80 overflow-y-auto">
+                  <div className="space-y-2 max-h-72 overflow-y-auto">
                     {lecturasBalanza
                       .filter(lectura => lectura.producto_id && lectura.precio_por_unidad)
                       .map((lectura) => (
                         <div key={lectura.id} className="border rounded-lg p-3 hover:bg-gray-50 transition-colors">
-                          <div className="flex justify-between items-start">
-                            <div className="flex-1">
-                              <div className="flex items-center gap-2 mb-2">
-                                <Weight className="h-4 w-4 text-blue-600" />
-                                <span className="font-semibold text-lg">{lectura.peso.toFixed(3)} kg</span>
+                          <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-3">
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 mb-1">
+                                <Weight className="h-4 w-4 text-blue-600 flex-shrink-0" />
+                                <span className="font-semibold text-base">{lectura.peso.toFixed(3)} kg</span>
                               </div>
                               
                               <div className="space-y-1">
-                                <div className="font-medium text-gray-900">
+                                <div className="font-medium text-gray-900 truncate">
                                   {lectura.producto_nombre}
                                 </div>
                                 <div className="text-sm text-gray-600">
-                                  Precio: ${lectura.precio_por_unidad?.toLocaleString()}/{lectura.unidad_medida || 'kg'}
+                                  ${lectura.precio_por_unidad?.toLocaleString()}/{lectura.unidad_medida || 'kg'}
                                 </div>
-                                <div className="text-sm text-gray-500 flex items-center gap-2">
-                                  <Clock className="h-3 w-3" />
-                                  {lectura.fecha}
+                                <div className="text-xs text-gray-500 flex items-center gap-1">
+                                  <Clock className="h-3 w-3 flex-shrink-0" />
+                                  <span className="truncate">{lectura.fecha}</span>
                                 </div>
                                 {lectura.total_calculado && (
-                                  <div className="font-semibold text-green-600">
+                                  <div className="font-semibold text-green-600 text-sm">
                                     Total: ${lectura.total_calculado.toFixed(2)}
                                   </div>
                                 )}
@@ -599,7 +599,7 @@ export default function RealizarVentaPage() {
                             <Button
                               size="sm"
                               onClick={() => agregarItemDesdePesaje(lectura)}
-                              className="bg-blue-600 hover:bg-blue-700 ml-3"
+                              className="bg-blue-600 hover:bg-blue-700 w-full sm:w-auto flex-shrink-0"
                             >
                               <Plus className="h-3 w-3 mr-1" />
                               Agregar

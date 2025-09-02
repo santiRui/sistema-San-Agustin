@@ -189,7 +189,7 @@ export default function VentasHechasPage() {
   }
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-4 sm:p-6 space-y-4 sm:space-y-6">
       <BreadcrumbNav
         items={[
           { label: "Fiambrería San Agustín", href: "/dashboard" },
@@ -204,7 +204,7 @@ export default function VentasHechasPage() {
       </div>
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
         {/* Azul: Monto ventas del día */}
         <Card className="border-l-4 border-l-blue-500">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -268,67 +268,70 @@ export default function VentasHechasPage() {
               </span>
             )}
           </CardDescription>
-          <div className="flex items-center space-x-4">
-            <div className="flex items-center space-x-2">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
+            <div className="flex items-center space-x-2 w-full sm:w-auto">
               <Search className="h-4 w-4 text-gray-400" />
               <Input
                 placeholder="Buscar por ID o cliente..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                className="max-w-sm"
+                className="w-full sm:max-w-sm"
               />
             </div>
-            <Select value={filterEstado} onValueChange={setFilterEstado}>
-              <SelectTrigger className="w-[180px]">
-                <SelectValue placeholder="Filtrar por estado" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="todos">Todos los estados</SelectItem>
-                <SelectItem value="completada">Completadas</SelectItem>
-                <SelectItem value="pendiente">Pendientes</SelectItem>
-                <SelectItem value="cancelada">Canceladas</SelectItem>
-              </SelectContent>
-            </Select>
-            <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
-              <PopoverTrigger asChild>
-                <Button
-                  variant="outline"
-                  className={cn(
-                    "w-[240px] justify-start text-left font-normal",
-                    !selectedDate && "text-muted-foreground",
+            <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+              <Select value={filterEstado} onValueChange={setFilterEstado}>
+                <SelectTrigger className="w-full sm:w-[180px]">
+                  <SelectValue placeholder="Filtrar por estado" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="todos">Todos los estados</SelectItem>
+                  <SelectItem value="completada">Completadas</SelectItem>
+                  <SelectItem value="pendiente">Pendientes</SelectItem>
+                  <SelectItem value="cancelada">Canceladas</SelectItem>
+                </SelectContent>
+              </Select>
+              <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    className={cn(
+                      "w-full sm:w-[240px] justify-start text-left font-normal",
+                      !selectedDate && "text-muted-foreground",
+                    )}
+                  >
+                    <CalendarIcon className="mr-2 h-4 w-4" />
+                    {selectedDate ? format(selectedDate, "dd/MM/yyyy", { locale: es }) : "Filtrar por fecha"}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-auto p-0" align="start">
+                  <Calendar mode="single" selected={selectedDate} onSelect={handleDateSelect} initialFocus locale={es} />
+                  {selectedDate && (
+                    <div className="p-3 border-t">
+                      <Button variant="outline" size="sm" onClick={clearDateFilter} className="w-full bg-transparent">
+                        Limpiar filtro
+                      </Button>
+                    </div>
                   )}
-                >
-                  <CalendarIcon className="mr-2 h-4 w-4" />
-                  {selectedDate ? format(selectedDate, "dd/MM/yyyy", { locale: es }) : "Filtrar por fecha"}
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent className="w-auto p-0" align="start">
-                <Calendar mode="single" selected={selectedDate} onSelect={handleDateSelect} initialFocus locale={es} />
-                {selectedDate && (
-                  <div className="p-3 border-t">
-                    <Button variant="outline" size="sm" onClick={clearDateFilter} className="w-full bg-transparent">
-                      Limpiar filtro
-                    </Button>
-                  </div>
-                )}
-              </PopoverContent>
-            </Popover>
+                </PopoverContent>
+              </Popover>
+            </div>
           </div>
         </CardHeader>
         <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>ID Venta</TableHead>
-                <TableHead>Fecha</TableHead>
-                <TableHead>Cliente</TableHead>
-                <TableHead>Items</TableHead>
-                <TableHead>Total</TableHead>
-                <TableHead>Método Pago</TableHead>
-                <TableHead>Estado</TableHead>
-                <TableHead>Acciones</TableHead>
-              </TableRow>
-            </TableHeader>
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="min-w-[100px]">ID Venta</TableHead>
+                  <TableHead className="min-w-[120px]">Fecha</TableHead>
+                  <TableHead className="min-w-[120px]">Cliente</TableHead>
+                  <TableHead className="hidden sm:table-cell">Items</TableHead>
+                  <TableHead className="min-w-[100px]">Total</TableHead>
+                  <TableHead className="hidden md:table-cell">Método Pago</TableHead>
+                  <TableHead className="min-w-[80px]">Estado</TableHead>
+                  <TableHead className="min-w-[80px]">Acciones</TableHead>
+                </TableRow>
+              </TableHeader>
             <TableBody>
               {loading ? (
                 <TableRow>
@@ -347,12 +350,12 @@ export default function VentasHechasPage() {
               ) : (
                 filteredSales.map((sale) => (
                   <TableRow key={sale.id}>
-                    <TableCell className="font-mono font-medium">{sale.id.substring(0, 8)}...</TableCell>
-                    <TableCell>{sale.fecha}</TableCell>
-                    <TableCell>{sale.cliente}</TableCell>
-                    <TableCell>{sale.items} items</TableCell>
+                    <TableCell className="font-mono font-medium text-xs sm:text-sm">{sale.id.substring(0, 8)}...</TableCell>
+                    <TableCell className="text-xs sm:text-sm">{sale.fecha}</TableCell>
+                    <TableCell className="truncate max-w-[120px]">{sale.cliente}</TableCell>
+                    <TableCell className="hidden sm:table-cell">{sale.items} items</TableCell>
                     <TableCell className="font-semibold">${sale.total.toLocaleString()}</TableCell>
-                    <TableCell>{sale.metodoPago}</TableCell>
+                    <TableCell className="hidden md:table-cell">{sale.metodoPago}</TableCell>
                     <TableCell>
                       <Badge
                         variant={
@@ -370,12 +373,14 @@ export default function VentasHechasPage() {
                               : "bg-red-500 text-white"
                         }
                       >
-                        {sale.estado}
+                        <span className="hidden sm:inline">{sale.estado}</span>
+                        <span className="sm:hidden">{sale.estado.charAt(0).toUpperCase()}</span>
                       </Badge>
                     </TableCell>
                     <TableCell>
-                      <Button variant="outline" size="icon" onClick={() => handleViewDetails(sale)}>
+                      <Button variant="outline" size="sm" onClick={() => handleViewDetails(sale)} className="w-full sm:w-auto">
                         <Eye className="h-4 w-4" />
+                        <span className="hidden sm:inline ml-1">Ver</span>
                       </Button>
                     </TableCell>
                   </TableRow>
@@ -383,15 +388,16 @@ export default function VentasHechasPage() {
               )}
             </TableBody>
           </Table>
+          </div>
         </CardContent>
       </Card>
 
       {/* Modal de Detalles de Venta */}
       <Dialog open={isDetailModalOpen} onOpenChange={setIsDetailModalOpen}>
-        <DialogContent className="max-w-3xl">
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Detalles de la Venta</DialogTitle>
-            <DialogDescription>
+            <DialogTitle className="text-lg sm:text-xl">Detalles de la Venta</DialogTitle>
+            <DialogDescription className="text-sm">
               Información completa de la venta y los productos incluidos.
             </DialogDescription>
           </DialogHeader>
@@ -401,47 +407,49 @@ export default function VentasHechasPage() {
             </div>
           ) : selectedVenta && (
             <div className="grid gap-4 py-4">
-                <div className="grid grid-cols-4 items-center gap-4 text-sm">
-                    <div className="font-semibold col-span-1">ID Venta:</div>
-                    <div className="col-span-3 font-mono">{selectedVenta.id}</div>
+                <div className="grid grid-cols-1 sm:grid-cols-4 items-start sm:items-center gap-2 sm:gap-4 text-sm">
+                    <div className="font-semibold">ID Venta:</div>
+                    <div className="sm:col-span-3 font-mono text-xs sm:text-sm break-all">{selectedVenta.id}</div>
                     
-                    <div className="font-semibold col-span-1">Cliente:</div>
-                    <div className="col-span-3">{selectedVenta.cliente}</div>
+                    <div className="font-semibold">Cliente:</div>
+                    <div className="sm:col-span-3 break-words">{selectedVenta.cliente}</div>
 
-                    <div className="font-semibold col-span-1">Fecha:</div>
-                    <div className="col-span-3">{selectedVenta.fecha}</div>
+                    <div className="font-semibold">Fecha:</div>
+                    <div className="sm:col-span-3">{selectedVenta.fecha}</div>
 
-                    <div className="font-semibold col-span-1">Método de Pago:</div>
-                    <div className="col-span-3">{selectedVenta.metodoPago}</div>
+                    <div className="font-semibold">Método de Pago:</div>
+                    <div className="sm:col-span-3">{selectedVenta.metodoPago}</div>
                 </div>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Producto</TableHead>
-                    <TableHead className="text-right">Cantidad</TableHead>
-                    <TableHead>Unidad</TableHead>
-                    <TableHead className="text-right">Precio Unit.</TableHead>
-                    <TableHead className="text-right">Subtotal</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {detallesVenta.map((item, index) => (
-                    <TableRow key={index}>
-                      <TableCell>{item.nombre_producto}</TableCell>
-                      <TableCell className="text-right">{item.cantidad}</TableCell>
-                      <TableCell>{item.unidad_medida}</TableCell>
-                      <TableCell className="text-right">
-                        {
-                          item.unidad_medida === 'gramos' 
-                          ? `$${item.precio_base_producto.toLocaleString()} (kg)`
-                          : `$${item.precio_unitario.toLocaleString()}`
-                        }
-                      </TableCell>
-                      <TableCell className="text-right font-semibold">${item.subtotal.toLocaleString()}</TableCell>
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="min-w-[120px]">Producto</TableHead>
+                      <TableHead className="text-right min-w-[80px]">Cantidad</TableHead>
+                      <TableHead className="hidden sm:table-cell">Unidad</TableHead>
+                      <TableHead className="text-right min-w-[100px]">Precio Unit.</TableHead>
+                      <TableHead className="text-right min-w-[100px]">Subtotal</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+                  <TableBody>
+                    {detallesVenta.map((item, index) => (
+                      <TableRow key={index}>
+                        <TableCell className="truncate max-w-[120px]">{item.nombre_producto}</TableCell>
+                        <TableCell className="text-right">{item.cantidad}</TableCell>
+                        <TableCell className="hidden sm:table-cell">{item.unidad_medida}</TableCell>
+                        <TableCell className="text-right text-xs sm:text-sm">
+                          {
+                            item.unidad_medida === 'gramos' 
+                            ? `$${item.precio_base_producto.toLocaleString()} (kg)`
+                            : `$${item.precio_unitario.toLocaleString()}`
+                          }
+                        </TableCell>
+                        <TableCell className="text-right font-semibold">${item.subtotal.toLocaleString()}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
               <div className="flex justify-end items-center pt-4 border-t mt-4">
                   <div className="text-xl font-bold">Total: ${selectedVenta.total.toLocaleString()}</div>
               </div>

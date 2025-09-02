@@ -352,7 +352,7 @@ export default function BalanzaPage() {
   const totalValor = filteredLecturas.reduce((sum, lectura) => sum + (lectura.total_calculado || 0), 0)
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-4 sm:p-6 space-y-4 sm:space-y-6">
       <BreadcrumbNav
         items={[
           { label: "Fiambrería San Agustín", href: "/dashboard" },
@@ -384,7 +384,7 @@ export default function BalanzaPage() {
       ) : null}
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
         <Card className="border-l-4 border-l-blue-500">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <div>
@@ -443,7 +443,7 @@ export default function BalanzaPage() {
               placeholder="Buscar por producto, código o fecha..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="max-w-sm"
+              className="w-full sm:max-w-sm"
             />
           </div>
         </CardHeader>
@@ -454,18 +454,19 @@ export default function BalanzaPage() {
               <span>Cargando lecturas...</span>
             </div>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Fecha</TableHead>
-                  <TableHead>Peso (kg)</TableHead>
-                  <TableHead>Producto</TableHead>
-                  <TableHead>Código</TableHead>
-                  <TableHead>Precio/Unidad</TableHead>
-                  <TableHead>Total Calculado</TableHead>
-                  <TableHead>Acciones</TableHead>
-                </TableRow>
-              </TableHeader>
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="min-w-[120px]">Fecha</TableHead>
+                    <TableHead className="min-w-[80px]">Peso (kg)</TableHead>
+                    <TableHead className="min-w-[120px]">Producto</TableHead>
+                    <TableHead className="hidden sm:table-cell">Código</TableHead>
+                    <TableHead className="hidden md:table-cell">Precio/Unidad</TableHead>
+                    <TableHead className="min-w-[100px]">Total</TableHead>
+                    <TableHead className="min-w-[80px]">Acciones</TableHead>
+                  </TableRow>
+                </TableHeader>
               <TableBody>
                 {filteredLecturas.length === 0 ? (
                   <TableRow>
@@ -476,19 +477,21 @@ export default function BalanzaPage() {
                 ) : (
                   filteredLecturas.map((lectura) => (
                     <TableRow key={lectura.id}>
-                      <TableCell className="font-mono text-sm">{lectura.fecha}</TableCell>
+                      <TableCell className="font-mono text-xs sm:text-sm">{lectura.fecha}</TableCell>
                       <TableCell className="font-semibold">
                         {lectura.peso.toFixed(3)}
                       </TableCell>
                       <TableCell className="font-medium">
-                        {lectura.producto_nombre || (
-                          <span className="text-gray-400 italic">Sin producto asociado</span>
-                        )}
+                        <div className="truncate max-w-[120px]">
+                          {lectura.producto_nombre || (
+                            <span className="text-gray-400 italic">Sin producto</span>
+                          )}
+                        </div>
                       </TableCell>
-                      <TableCell className="font-mono">
+                      <TableCell className="font-mono hidden sm:table-cell">
                         {lectura.producto_codigo || '-'}
                       </TableCell>
-                      <TableCell>
+                      <TableCell className="hidden md:table-cell">
                         {lectura.precio_por_unidad ? (
                           `$${lectura.precio_por_unidad.toLocaleString()}/${lectura.unidad_medida || 'kg'}`
                         ) : '-'}
@@ -507,9 +510,11 @@ export default function BalanzaPage() {
                             setSelectedProducto(lectura.producto_id || '')
                             setIsDialogOpen(true)
                           }}
+                          className="w-full sm:w-auto"
                         >
                           <Link className="h-4 w-4 mr-1" />
-                          {lectura.producto_id ? 'Cambiar' : 'Asociar'}
+                          <span className="hidden sm:inline">{lectura.producto_id ? 'Cambiar' : 'Asociar'}</span>
+                          <span className="sm:hidden">+</span>
                         </Button>
                       </TableCell>
                     </TableRow>
@@ -517,6 +522,7 @@ export default function BalanzaPage() {
                 )}
               </TableBody>
             </Table>
+            </div>
           )}
         </CardContent>
       </Card>
