@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Plus, Trash2, ShoppingCart, Calculator } from "lucide-react"
+import { Plus, Trash2, ShoppingCart, Calculator, Weight, Clock } from "lucide-react"
 import { Separator } from "@/components/ui/separator"
 import { BreadcrumbNav } from "@/components/breadcrumb-nav"
 import { supabase } from "@/lib/supabaseClient"
@@ -40,12 +40,27 @@ interface Cliente {
   numero_documento: string;
 }
 
+interface LecturaBalanza {
+  id: string
+  fecha: string
+  peso: number
+  producto_id?: string
+  producto_nombre?: string
+  producto_codigo?: string
+  precio_por_unidad?: number
+  unidad_medida?: string
+  total_calculado?: number
+  fecha_lectura: string
+}
+
 export default function RealizarVentaPage() {
   const router = useRouter();
   const { showAlert } = useAlert();
 
   const [productos, setProductos] = useState<Producto[]>([]);
   const [clientes, setClientes] = useState<Cliente[]>([]);
+  const [lecturasBalanza, setLecturasBalanza] = useState<LecturaBalanza[]>([]);
+  const [lecturasProductoSeleccionado, setLecturasProductoSeleccionado] = useState<LecturaBalanza[]>([]);
   
   const [clienteId, setClienteId] = useState<string | null>(null);
   const [metodoPago, setMetodoPago] = useState("");
@@ -57,6 +72,60 @@ export default function RealizarVentaPage() {
 
   const selectedProduct = productos.find(p => p.id === productoSeleccionadoId);
 
+  // Función para cargar datos de pesaje
+  const fetchLecturasBalanza = async () => {
+    try {
+      const { data: lecturasData, error: lecturasError } = await supabase
+        .from('lecturas_balanza')
+        .select(`
+          id,
+          fecha_lectura,
+          peso,
+          producto_id
+        `)
+        .order('fecha_lectura', { ascending: false })
+        .limit(100);
+
+      if (lecturasError) {
+        console.error('Error al cargar lecturas:', lecturasError);
+        return;
+      }
+
+      // Procesar lecturas con información de productos
+      const lecturasConProductos = [];
+      for (const lectura of lecturasData || []) {
+        let productoInfo = null;
+        
+        if (lectura.producto_id) {
+          const { data: productoData } = await supabase
+            .from('productos')
+            .select('id, codigo, nombre, precio, unidad_medida')
+            .eq('id', lectura.producto_id)
+            .single();
+          
+          productoInfo = productoData;
+        }
+
+        lecturasConProductos.push({
+          id: lectura.id.toString(),
+          fecha: new Date(lectura.fecha_lectura).toLocaleString('es-AR'),
+          peso: lectura.peso,
+          producto_id: lectura.producto_id || null,
+          producto_nombre: productoInfo?.nombre,
+          producto_codigo: productoInfo?.codigo,
+          precio_por_unidad: productoInfo?.precio,
+          unidad_medida: productoInfo?.unidad_medida,
+          total_calculado: productoInfo?.precio ? (lectura.peso * productoInfo.precio) : 0,
+          fecha_lectura: lectura.fecha_lectura
+        });
+      }
+
+      setLecturasBalanza(lecturasConProductos);
+    } catch (error) {
+      console.error('Error al cargar datos de pesaje:', error);
+    }
+  };
+
   useEffect(() => {
     const fetchData = async () => {
       const { data: productosData, error: productosError } = await supabase.from('productos').select('*');
@@ -66,9 +135,12 @@ export default function RealizarVentaPage() {
       const { data: clientesData, error: clientesError } = await supabase.from('clientes').select('*');
       if (clientesError) showAlert('Error al cargar clientes', 'error');
       else setClientes(clientesData || []);
+
+      // Cargar datos de pesaje
+      await fetchLecturasBalanza();
     }
     fetchData();
-  }, [showAlert]);
+  }, []);
 
   useEffect(() => {
     if (selectedProduct) {
@@ -80,8 +152,55 @@ export default function RealizarVentaPage() {
         setUnidadMedida('kg');
       }
       setCantidad("");
+      
+      // Filtrar lecturas de pesaje para el producto seleccionado
+      const lecturasFiltradas = lecturasBalanza.filter(lectura => 
+        lectura.producto_id === selectedProduct.id
+      );
+      setLecturasProductoSeleccionado(lecturasFiltradas);
+    } else {
+      setLecturasProductoSeleccionado([]);
     }
-  }, [selectedProduct]);
+  }, [selectedProduct, lecturasBalanza]);
+
+  // Función para agregar item desde datos de pesaje
+  const agregarItemDesdePesaje = (lectura: LecturaBalanza) => {
+    if (!lectura.producto_id || !lectura.precio_por_unidad) {
+      showAlert('Esta lectura no tiene un producto asociado válido.', 'error');
+      return;
+    }
+
+    const producto = productos.find(p => p.id === lectura.producto_id);
+    if (!producto) {
+      showAlert('Producto no encontrado.', 'error');
+      return;
+    }
+
+    // Verificar si ya existe en el carrito
+    const itemExistente = items.find(item => 
+      item.producto_id === lectura.producto_id && 
+      item.cantidad === lectura.peso &&
+      item.unidad_medida === 'kg'
+    );
+
+    if (itemExistente) {
+      showAlert('Este pesaje ya está agregado al carrito.', 'error');
+      return;
+    }
+
+    const nuevoItem: VentaItem = {
+      id: `pesaje-${lectura.id}-${Date.now()}`,
+      producto_id: lectura.producto_id,
+      nombre: lectura.producto_nombre || producto.nombre,
+      precio: lectura.precio_por_unidad,
+      cantidad: lectura.peso,
+      unidad_medida: 'kg',
+      subtotal: lectura.total_calculado || 0,
+    };
+
+    setItems([...items, nuevoItem]);
+    showAlert(`${lectura.producto_nombre} agregado al carrito (${lectura.peso}kg)`, 'success');
+  };
 
   const agregarItem = () => {
     if (!productoSeleccionadoId || !cantidad || !unidadMedida || !selectedProduct) {
@@ -348,82 +467,151 @@ export default function RealizarVentaPage() {
             </CardContent>
           </Card>
 
-          <Card>
-            <CardHeader>
-              <CardTitle>Agregar Productos</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
-                                <div className="md:col-span-4">
-                  <Label htmlFor="producto">Producto</Label>
-                  <Select value={productoSeleccionadoId || ''} onValueChange={setProductoSeleccionadoId}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Seleccionar producto" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {productos.map((producto) => (
-                        <SelectItem key={producto.id} value={producto.id}>
-                          {producto.nombre}
-                        </SelectItem>
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+            {/* Panel de Agregar Productos */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Agregar Productos</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  <div>
+                    <Label htmlFor="producto">Producto</Label>
+                    <Select value={productoSeleccionadoId || ''} onValueChange={setProductoSeleccionadoId}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Seleccionar producto" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {productos.map((producto) => (
+                          <SelectItem key={producto.id} value={producto.id}>
+                            {producto.nombre}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {selectedProduct && (
+                      <p className="text-sm text-gray-500 mt-1">
+                        Precio: ${(selectedProduct.precio ?? 0).toLocaleString()} | Stock disponible: {selectedProduct.stock} {selectedProduct.unidad_medida}
+                      </p>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <Label htmlFor="unidadMedida">Unidad</Label>
+                      <Select 
+                        value={unidadMedida} 
+                        onValueChange={(value: 'kg' | 'gramos' | 'unidades') => setUnidadMedida(value)}
+                        disabled={!selectedProduct}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Unidad" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem 
+                            value="unidades" 
+                            disabled={!selectedProduct || !['unidades', 'unidad'].includes(selectedProduct.unidad_medida)}
+                          >
+                            Unidades
+                          </SelectItem>
+                          <SelectItem 
+                            value="kg" 
+                            disabled={!selectedProduct || !['kg', 'gramos', 'kilogramo'].includes(selectedProduct.unidad_medida)}
+                          >
+                            Kg
+                          </SelectItem>
+                          <SelectItem 
+                            value="gramos" 
+                            disabled={!selectedProduct || !['kg', 'gramos', 'kilogramo'].includes(selectedProduct.unidad_medida)}
+                          >
+                            Gramos
+                          </SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
+                      <Label htmlFor="cantidad">Cantidad</Label>
+                      <Input
+                        id="cantidad"
+                        type="number"
+                        step="0.01"
+                        value={cantidad}
+                        onChange={(e) => setCantidad(e.target.value)}
+                        placeholder="0.00"
+                      />
+                    </div>
+                  </div>
+                  <Button onClick={agregarItem} className="w-full bg-orange-600 hover:bg-orange-700">
+                    <Plus className="h-4 w-4 mr-2" />
+                    Agregar Producto
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Panel de Datos de Pesaje */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Weight className="h-5 w-5" />
+                  Datos de Pesaje
+                </CardTitle>
+                <CardDescription>
+                  Todos los pesajes disponibles con productos asociados
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {lecturasBalanza.filter(lectura => lectura.producto_id && lectura.precio_por_unidad).length === 0 ? (
+                  <div className="text-center py-8 text-gray-500">
+                    <Weight className="h-12 w-12 mx-auto mb-2 text-gray-300" />
+                    <p>No hay pesajes con productos asociados disponibles</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3 max-h-80 overflow-y-auto">
+                    {lecturasBalanza
+                      .filter(lectura => lectura.producto_id && lectura.precio_por_unidad)
+                      .map((lectura) => (
+                        <div key={lectura.id} className="border rounded-lg p-3 hover:bg-gray-50 transition-colors">
+                          <div className="flex justify-between items-start">
+                            <div className="flex-1">
+                              <div className="flex items-center gap-2 mb-2">
+                                <Weight className="h-4 w-4 text-blue-600" />
+                                <span className="font-semibold text-lg">{lectura.peso.toFixed(3)} kg</span>
+                              </div>
+                              
+                              <div className="space-y-1">
+                                <div className="font-medium text-gray-900">
+                                  {lectura.producto_nombre}
+                                </div>
+                                <div className="text-sm text-gray-600">
+                                  Precio: ${lectura.precio_por_unidad?.toLocaleString()}/{lectura.unidad_medida || 'kg'}
+                                </div>
+                                <div className="text-sm text-gray-500 flex items-center gap-2">
+                                  <Clock className="h-3 w-3" />
+                                  {lectura.fecha}
+                                </div>
+                                {lectura.total_calculado && (
+                                  <div className="font-semibold text-green-600">
+                                    Total: ${lectura.total_calculado.toFixed(2)}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                            <Button
+                              size="sm"
+                              onClick={() => agregarItemDesdePesaje(lectura)}
+                              className="bg-blue-600 hover:bg-blue-700 ml-3"
+                            >
+                              <Plus className="h-3 w-3 mr-1" />
+                              Agregar
+                            </Button>
+                          </div>
+                        </div>
                       ))}
-                    </SelectContent>
-                  </Select>
-                  {selectedProduct && (
-                    <p className="text-sm text-gray-500 mt-1">
-                      Precio: ${(selectedProduct.precio ?? 0).toLocaleString()} | Stock disponible: {selectedProduct.stock} {selectedProduct.unidad_medida}
-                    </p>
-                  )}
-                </div>
-                <div>
-                  <Label htmlFor="unidadMedida">Unidad</Label>
-                  <Select 
-                    value={unidadMedida} 
-                    onValueChange={(value: 'kg' | 'gramos' | 'unidades') => setUnidadMedida(value)}
-                    disabled={!selectedProduct}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Unidad" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem 
-                        value="unidades" 
-                        disabled={!selectedProduct || !['unidades', 'unidad'].includes(selectedProduct.unidad_medida)}
-                      >
-                        Unidades
-                      </SelectItem>
-                      <SelectItem 
-                        value="kg" 
-                        disabled={!selectedProduct || !['kg', 'gramos', 'kilogramo'].includes(selectedProduct.unidad_medida)}
-                      >
-                        Kg
-                      </SelectItem>
-                      <SelectItem 
-                        value="gramos" 
-                        disabled={!selectedProduct || !['kg', 'gramos', 'kilogramo'].includes(selectedProduct.unidad_medida)}
-                      >
-                        Gramos
-                      </SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div>
-                  <Label htmlFor="cantidad">Cantidad</Label>
-                  <Input
-                    id="cantidad"
-                    type="number"
-                    step="0.01"
-                    value={cantidad}
-                    onChange={(e) => setCantidad(e.target.value)}
-                    placeholder="0.00"
-                  />
-                </div>
-                <Button onClick={agregarItem} className="bg-orange-600 hover:bg-orange-700 md:col-start-4">
-                  <Plus className="h-4 w-4 mr-2" />
-                  Agregar
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
 
           <Card>
             <CardHeader>

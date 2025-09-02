@@ -156,9 +156,28 @@ export default function VentasHechasPage() {
     return matchesSearch && matchesFilter && matchesDate
   })
 
-  const totalVentas = filteredSales.reduce((sum, sale) => sum + sale.total, 0)
-  const ventasCompletadas = filteredSales.filter((sale) => sale.estado === "completada").length
-  const ventasPendientes = filteredSales.filter((sale) => sale.estado === "pendiente").length
+  // Obtener la fecha actual
+  const now = new Date();
+  const esMismoDia = (date: Date) =>
+    date.getDate() === now.getDate() &&
+    date.getMonth() === now.getMonth() &&
+    date.getFullYear() === now.getFullYear();
+  const esMismoMes = (date: Date) =>
+    date.getMonth() === now.getMonth() &&
+    date.getFullYear() === now.getFullYear();
+
+  // Ventas del día (solo completadas)
+  const ventasDelDia = sales.filter(sale => sale.estado === "completada" && esMismoDia(sale.fechaDate));
+  const montoVentasDelDia = ventasDelDia.reduce((sum, sale) => sum + sale.total, 0);
+  const cantidadVentasDelDia = ventasDelDia.length;
+
+  // Ventas del mes (solo completadas)
+  const ventasDelMes = sales.filter(sale => sale.estado === "completada" && esMismoMes(sale.fechaDate));
+  const cantidadVentasDelMes = ventasDelMes.length;
+
+  // Ventas totales (todas completadas)
+  const ventasTotales = sales.filter(sale => sale.estado === "completada");
+  const montoVentasTotales = ventasTotales.reduce((sum, sale) => sum + sale.total, 0);
 
   const handleDateSelect = (date: Date | undefined) => {
     setSelectedDate(date)
@@ -186,47 +205,49 @@ export default function VentasHechasPage() {
 
       {/* Stats Cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+        {/* Azul: Monto ventas del día */}
+        <Card className="border-l-4 border-l-blue-500">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <div>
+              <CardTitle className="text-sm font-medium text-blue-600">Ventas del Día</CardTitle>
+              <div className="text-2xl font-bold text-gray-900">${montoVentasDelDia.toLocaleString()}</div>
+              <p className="text-xs text-gray-500 mt-1">Monto de ventas completadas hoy</p>
+            </div>
+            <ShoppingCart className="h-8 w-8 text-blue-500" />
+          </CardHeader>
+        </Card>
+
+        {/* Verde: Monto ventas totales */}
         <Card className="border-l-4 border-l-green-500">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <div>
-              <CardTitle className="text-sm font-medium text-gray-600">Total Ventas</CardTitle>
-              <div className="text-2xl font-bold text-gray-900">${totalVentas.toLocaleString()}</div>
-              <p className="text-xs text-gray-500 mt-1">{selectedDate ? "Del día seleccionado" : "Ingresos totales"}</p>
+              <CardTitle className="text-sm font-medium text-green-600">Ventas Totales</CardTitle>
+              <div className="text-2xl font-bold text-gray-900">${montoVentasTotales.toLocaleString()}</div>
+              <p className="text-xs text-gray-500 mt-1">Monto total de ventas completadas</p>
             </div>
             <ShoppingCart className="h-8 w-8 text-green-500" />
           </CardHeader>
         </Card>
 
-        <Card className="border-l-4 border-l-blue-500">
+        {/* Marrón: Cantidad ventas del día */}
+        <Card className="border-l-4" style={{ borderLeftColor: '#a0522d' }}>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <div>
-              <CardTitle className="text-sm font-medium text-gray-600">Completadas</CardTitle>
-              <div className="text-2xl font-bold text-gray-900">{ventasCompletadas}</div>
-              <p className="text-xs text-gray-500 mt-1">Ventas finalizadas</p>
+              <CardTitle className="text-sm font-medium" style={{ color: '#a0522d' }}>Ventas Hoy</CardTitle>
+              <div className="text-2xl font-bold text-gray-900">{cantidadVentasDelDia}</div>
+              <p className="text-xs text-gray-500 mt-1">Cantidad de ventas completadas hoy</p>
             </div>
-            <Badge className="bg-green-100 text-green-800">{ventasCompletadas}</Badge>
+            <Badge style={{ backgroundColor: '#f4e1d2', color: '#a0522d' }}>{cantidadVentasDelDia}</Badge>
           </CardHeader>
         </Card>
 
-        <Card className="border-l-4 border-l-yellow-500">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <div>
-              <CardTitle className="text-sm font-medium text-gray-600">Pendientes</CardTitle>
-              <div className="text-2xl font-bold text-gray-900">{ventasPendientes}</div>
-              <p className="text-xs text-gray-500 mt-1">Por completar</p>
-            </div>
-            <Badge className="bg-yellow-100 text-yellow-800">{ventasPendientes}</Badge>
-          </CardHeader>
-        </Card>
-
+        {/* Morado: Cantidad ventas del mes */}
         <Card className="border-l-4 border-l-purple-500">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <div>
-              <CardTitle className="text-sm font-medium text-gray-600">Promedio</CardTitle>
-              <div className="text-2xl font-bold text-gray-900">
-                ${filteredSales.length > 0 ? Math.round(totalVentas / filteredSales.length).toLocaleString() : "0"}
-              </div>
-              <p className="text-xs text-gray-500 mt-1">Por venta</p>
+              <CardTitle className="text-sm font-medium text-purple-600">Ventas del Mes</CardTitle>
+              <div className="text-2xl font-bold text-gray-900">{cantidadVentasDelMes}</div>
+              <p className="text-xs text-gray-500 mt-1">Cantidad de ventas completadas este mes</p>
             </div>
             <CalendarIcon className="h-8 w-8 text-purple-500" />
           </CardHeader>
