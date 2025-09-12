@@ -106,8 +106,8 @@ const server = http.createServer((req, res) => {
   res.end(JSON.stringify({ error: "Endpoint no encontrado" }));
 });
 
-const PORT = 3000;
-const HOST = 'localhost';
+const PORT = Number(process.env.PORT) || 3001; // usar 3001 por defecto para no chocar con Next.js
+const HOST = process.env.HOST || 'localhost';
 
 server.listen(PORT, HOST, () => {
   console.log('='.repeat(60));

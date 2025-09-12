@@ -22,6 +22,8 @@ interface VentaItem {
   cantidad: number
   unidad_medida: string
   subtotal: number
+  // ID de lectura de balanza si proviene de un pesaje
+  lectura_id?: string
 }
 
 interface Producto {
@@ -51,6 +53,9 @@ interface LecturaBalanza {
   unidad_medida?: string
   total_calculado?: number
   fecha_lectura: string
+  // Campos opcionales para marcar uso
+  usado?: boolean
+  id_venta?: string | number | null
 }
 
 export default function RealizarVentaPage() {
@@ -69,54 +74,95 @@ export default function RealizarVentaPage() {
   const [productoSeleccionadoId, setProductoSeleccionadoId] = useState<string | null>(null);
   const [unidadMedida, setUnidadMedida] = useState<'kg' | 'gramos' | 'unidades'>("unidades");
   const [cantidad, setCantidad] = useState("");
+  // Búsqueda de productos
+  const [productSearchTerm, setProductSearchTerm] = useState('');
+  const [showProductSuggestions, setShowProductSuggestions] = useState(false);
 
   const selectedProduct = productos.find(p => p.id === productoSeleccionadoId);
+  // Detección de tabla y columna de fecha para lecturas de balanza
+  const detectarEstructuraLecturas = async () => {
+    const posiblesTablas = ['lecturas_balanza', 'lectura_balanza', 'lecturas_de_balanza', 'lectura_de_balanza'];
+    for (const t of posiblesTablas) {
+      const { error } = await supabase.from(t as any).select('id').limit(1);
+      if (!error) {
+        const candidatosFecha = ['fecha_lectura', 'fecha', 'created_at'];
+        for (const c of candidatosFecha) {
+          const { error: eFecha } = await supabase.from(t as any).select(`id, ${c}` as any).limit(1);
+          if (!eFecha) return { tabla: t, fecha: c };
+        }
+        return { tabla: t, fecha: 'fecha_lectura' };
+      }
+    }
+    return { tabla: 'lecturas_balanza', fecha: 'fecha_lectura' };
+  }
 
   // Función para cargar datos de pesaje
   const fetchLecturasBalanza = async () => {
     try {
-      const { data: lecturasData, error: lecturasError } = await supabase
-        .from('lecturas_balanza')
-        .select(`
-          id,
-          fecha_lectura,
-          peso,
-          producto_id
-        `)
-        .order('fecha_lectura', { ascending: false })
-        .limit(100);
-
-      if (lecturasError) {
+      const { tabla, fecha } = await detectarEstructuraLecturas();
+      const colsBase = `id, ${fecha}, peso, producto_id`;
+      const colsExtras = `usado, id_venta`;
+      // Intentar con columnas extra y filtros (solo pesajes disponibles)
+      let lecturasData: any, lecturasError: any;
+      try {
+        const q = supabase
+          .from(tabla as any)
+          .select(`${colsBase}, ${colsExtras}` as any)
+          .eq('usado', false)
+          .is('id_venta', null)
+          .order(fecha, { ascending: false })
+          .limit(100) as any;
+        const res = await q;
+        lecturasData = res.data;
+        lecturasError = res.error;
+      } catch (e) {
+        lecturasData = null; lecturasError = e as any;
+      }
+      // Si falla por columnas no existentes, reintentar sin filtros/columnas extra
+      if (lecturasError && (lecturasError.message?.includes('usado') || lecturasError.message?.includes('id_venta'))) {
+        const retry = await supabase
+          .from(tabla as any)
+          .select(colsBase as any)
+          .order(fecha, { ascending: false })
+          .limit(100);
+        lecturasData = retry.data;
+        lecturasError = retry.error;
+      }
+      // Solo tratar como error si hay message
+      if (lecturasError && lecturasError.message) {
         console.error('Error al cargar lecturas:', lecturasError);
         return;
       }
 
       // Procesar lecturas con información de productos
       const lecturasConProductos = [];
-      for (const lectura of lecturasData || []) {
+      const filas: any[] = Array.isArray(lecturasData) ? (lecturasData as any[]) : [];
+      for (const lecturaAny of filas) {
         let productoInfo = null;
         
-        if (lectura.producto_id) {
+        if (lecturaAny.producto_id) {
           const { data: productoData } = await supabase
             .from('productos')
             .select('id, codigo, nombre, precio, unidad_medida')
-            .eq('id', lectura.producto_id)
+            .eq('id', lecturaAny.producto_id)
             .single();
           
           productoInfo = productoData;
         }
 
         lecturasConProductos.push({
-          id: lectura.id.toString(),
-          fecha: new Date(lectura.fecha_lectura).toLocaleString('es-AR'),
-          peso: lectura.peso,
-          producto_id: lectura.producto_id || null,
+          id: String(lecturaAny.id),
+          fecha: new Date(lecturaAny[fecha]).toLocaleString('es-AR'),
+          peso: lecturaAny.peso,
+          producto_id: lecturaAny.producto_id || null,
           producto_nombre: productoInfo?.nombre,
           producto_codigo: productoInfo?.codigo,
           precio_por_unidad: productoInfo?.precio,
           unidad_medida: productoInfo?.unidad_medida,
-          total_calculado: productoInfo?.precio ? (lectura.peso * productoInfo.precio) : 0,
-          fecha_lectura: lectura.fecha_lectura
+          total_calculado: productoInfo?.precio ? (lecturaAny.peso * productoInfo.precio) : 0,
+          fecha_lectura: lecturaAny[fecha],
+          usado: lecturaAny.usado ?? undefined,
+          id_venta: lecturaAny.id_venta ?? null,
         });
       }
 
@@ -165,6 +211,16 @@ export default function RealizarVentaPage() {
 
   // Función para agregar item desde datos de pesaje
   const agregarItemDesdePesaje = (lectura: LecturaBalanza) => {
+    // Evitar reutilizar lecturas marcadas
+    if (lectura.usado || lectura.id_venta) {
+      showAlert('Este pesaje ya fue utilizado en una venta y no puede reutilizarse.', 'error');
+      return;
+    }
+    // Evitar duplicar el mismo pesaje en el carrito
+    if (items.some(i => i.lectura_id === lectura.id)) {
+      showAlert('Este pesaje ya está en el carrito.', 'error');
+      return;
+    }
     if (!lectura.producto_id || !lectura.precio_por_unidad) {
       showAlert('Esta lectura no tiene un producto asociado válido.', 'error');
       return;
@@ -196,6 +252,7 @@ export default function RealizarVentaPage() {
       cantidad: lectura.peso,
       unidad_medida: 'kg',
       subtotal: lectura.total_calculado || 0,
+      lectura_id: lectura.id,
     };
 
     setItems([...items, nuevoItem]);
@@ -401,8 +458,58 @@ export default function RealizarVentaPage() {
         console.error('Error al insertar ticket:', ticketError);
       }
 
-      showAlert('Venta procesada exitosamente', 'success');
-      router.push('/dashboard/ventas');
+      // --- MARCAR PESAJES COMO USADOS ---
+      const itemsConPesaje = items.filter(i => i.lectura_id);
+      for (const item of itemsConPesaje) {
+        try {
+          // Intentar setear ambos campos si existen
+          let updatePayload: any = { usado: true, id_venta: ventaId };
+          let { error: updError } = await supabase
+            .from('lecturas_balanza')
+            .update(updatePayload)
+            .eq('id', item.lectura_id);
+          if (updError) {
+            // Reintentar con cada uno por separado por si alguna columna no existe
+            const { error: updUsado } = await supabase
+              .from('lecturas_balanza')
+              .update({ usado: true } as any)
+              .eq('id', item.lectura_id);
+            const { error: updVenta } = await supabase
+              .from('lecturas_balanza')
+              .update({ id_venta: ventaId } as any)
+              .eq('id', item.lectura_id);
+            if (updUsado && updVenta) {
+              console.warn('No fue posible marcar el pesaje como usado. Considera agregar columna usado:boolean o id_venta.');
+            }
+          }
+        } catch (e) {
+          console.error('Error marcando pesaje usado:', e);
+        }
+      }
+
+      // Optimista: marcar en estado local como usados
+      if (itemsConPesaje.length > 0) {
+        setLecturasBalanza(prev => prev.map(l =>
+          itemsConPesaje.some(i => i.lectura_id === l.id)
+            ? { ...l, usado: true, id_venta: ventaId }
+            : l
+        ));
+      }
+
+      // Refrescar lecturas desde DB (por si existen columnas y quedaron persistidas)
+      await fetchLecturasBalanza();
+
+      // Resetear formulario para nueva venta
+      setClienteId(null);
+      setMetodoPago("");
+      setItems([]);
+      setProductoSeleccionadoId(null);
+      setProductSearchTerm("");
+      setUnidadMedida('unidades');
+      setCantidad("");
+
+      showAlert('Venta procesada exitosamente. Listo para iniciar una nueva venta.', 'success');
+      // Permanecer en la pantalla actual como solicitaste
 
     } catch (error: any) {
       showAlert(error.message || 'Ocurrió un error al procesar la venta.', 'error');
@@ -477,18 +584,54 @@ export default function RealizarVentaPage() {
                 <div className="space-y-4">
                   <div>
                     <Label htmlFor="producto">Producto</Label>
-                    <Select value={productoSeleccionadoId || ''} onValueChange={setProductoSeleccionadoId}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Seleccionar producto" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {productos.map((producto) => (
-                          <SelectItem key={producto.id} value={producto.id}>
-                            {producto.nombre}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    {/* Campo de búsqueda con autocompletado */}
+                    <div className="relative">
+                      <Input
+                        id="producto"
+                        placeholder="Escribe nombre o código..."
+                        value={productSearchTerm}
+                        onChange={(e) => {
+                          setProductSearchTerm(e.target.value)
+                          setShowProductSuggestions(e.target.value.length > 0)
+                          if (e.target.value.length === 0) {
+                            setProductoSeleccionadoId(null)
+                          }
+                        }}
+                        onFocus={() => setShowProductSuggestions(productSearchTerm.length > 0)}
+                      />
+                      {/* Lista de sugerencias */}
+                      {showProductSuggestions && (
+                        <div className="absolute z-50 w-full mt-1 bg-white border border-gray-200 rounded-md shadow-lg max-h-60 overflow-y-auto">
+                          {productos.filter(p => (
+                            p.nombre.toLowerCase().includes(productSearchTerm.toLowerCase()) ||
+                            p.codigo.toLowerCase().includes(productSearchTerm.toLowerCase())
+                          )).map((p) => (
+                            <div
+                              key={p.id}
+                              className="p-3 hover:bg-gray-50 cursor-pointer border-b border-gray-100 last:border-b-0"
+                              onClick={() => {
+                                setProductoSeleccionadoId(p.id)
+                                setProductSearchTerm(`${p.nombre} (${p.codigo})`)
+                                setShowProductSuggestions(false)
+                              }}
+                            >
+                              <div className="flex flex-col">
+                                <span className="font-medium text-gray-900">{p.nombre}</span>
+                                <span className="text-sm text-gray-500">
+                                  {p.codigo} - ${p.precio.toLocaleString()}/{p.unidad_medida}
+                                </span>
+                              </div>
+                            </div>
+                          ))}
+                          {productos.filter(p => (
+                            p.nombre.toLowerCase().includes(productSearchTerm.toLowerCase()) ||
+                            p.codigo.toLowerCase().includes(productSearchTerm.toLowerCase())
+                          )).length === 0 && (
+                            <div className="p-3 text-center text-gray-500 text-sm">No se encontraron productos</div>
+                          )}
+                        </div>
+                      )}
+                    </div>
                     {selectedProduct && (
                       <p className="text-sm text-gray-500 mt-1">
                         Precio: ${(selectedProduct.precio ?? 0).toLocaleString()} | Stock disponible: {selectedProduct.stock} {selectedProduct.unidad_medida}
@@ -560,7 +703,7 @@ export default function RealizarVentaPage() {
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                {lecturasBalanza.filter(lectura => lectura.producto_id && lectura.precio_por_unidad).length === 0 ? (
+                {lecturasBalanza.filter(lectura => lectura.producto_id && lectura.precio_por_unidad && !(lectura.usado || lectura.id_venta)).length === 0 ? (
                   <div className="text-center py-6 text-gray-500">
                     <Weight className="h-8 w-8 mx-auto mb-2 text-gray-300" />
                     <p className="text-sm">No hay pesajes disponibles</p>
@@ -568,7 +711,7 @@ export default function RealizarVentaPage() {
                 ) : (
                   <div className="space-y-2 max-h-72 overflow-y-auto">
                     {lecturasBalanza
-                      .filter(lectura => lectura.producto_id && lectura.precio_por_unidad)
+                      .filter(lectura => lectura.producto_id && lectura.precio_por_unidad && !(lectura.usado || lectura.id_venta))
                       .map((lectura) => (
                         <div key={lectura.id} className="border rounded-lg p-3 hover:bg-gray-50 transition-colors">
                           <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-3">

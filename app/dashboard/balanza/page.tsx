@@ -38,8 +38,6 @@ export default function BalanzaPage() {
   const [lecturas, setLecturas] = useState<LecturaBalanza[]>([])
   const [productos, setProductos] = useState<Producto[]>([])
   const [searchTerm, setSearchTerm] = useState("")
-  const [isConnected, setIsConnected] = useState(false)
-  const [pesoActual, setPesoActual] = useState(0.0)
   const [isLoading, setIsLoading] = useState(true)
   const [selectedLectura, setSelectedLectura] = useState<LecturaBalanza | null>(null)
   const [selectedProducto, setSelectedProducto] = useState<string>('')
@@ -47,65 +45,72 @@ export default function BalanzaPage() {
   const [productSearchTerm, setProductSearchTerm] = useState('')
   const [showProductSuggestions, setShowProductSuggestions] = useState(false)
   const { showAlert } = useAlert()
+  // Estado para compatibilidad con distintos nombres de tabla/columnas
+  const [tablaLecturas, setTablaLecturas] = useState<string>('lecturas_balanza')
+  const [columnaFecha, setColumnaFecha] = useState<string>('fecha_lectura')
+  
+
+  // Detectar tabla y columnas disponibles
+  const detectarEstructura = async () => {
+    const posiblesTablas = [
+      'lecturas_balanza',
+      'lectura_balanza',
+      'lecturas_de_balanza',
+      'lectura_de_balanza',
+    ]
+    for (const t of posiblesTablas) {
+      const { data: testData, error: testError } = await supabase
+        .from(t as any)
+        .select('id')
+        .limit(1)
+      if (!testError) {
+        // Detectar nombre de columna de fecha más común
+        const candidatosFecha = ['fecha_lectura', 'fecha', 'created_at']
+        let fechaElegida = 'fecha_lectura'
+        for (const c of candidatosFecha) {
+          const { error: eFecha } = await supabase
+            .from(t as any)
+            .select(`id, ${c}` as any)
+            .limit(1)
+          if (!eFecha) {
+            fechaElegida = c
+            break
+          }
+        }
+        setTablaLecturas(t)
+        setColumnaFecha(fechaElegida)
+        return { tabla: t, fecha: fechaElegida }
+      }
+    }
+    // Si no encontró ninguna, mantener valores por defecto
+    return { tabla: 'lecturas_balanza', fecha: 'fecha_lectura' }
+  }
 
   // Cargar datos de la base de datos
   const fetchLecturasFromDB = async () => {
     try {
       setIsLoading(true)
-      
-      // Primero intentar una consulta simple para verificar si la tabla existe
-      const { data: testData, error: testError } = await supabase
-        .from('lecturas_balanza')
-        .select('id')
-        .limit(1)
-
-      if (testError) {
-        console.error('Error al acceder a lecturas_balanza:', testError)
-        // Si la tabla no existe, crear datos de ejemplo
-        const ejemploLecturas: LecturaBalanza[] = [
-          {
-            id: '1',
-            fecha: new Date().toLocaleString('es-AR'),
-            peso: 0.5,
-            fecha_lectura: new Date().toISOString()
-          },
-          {
-            id: '2', 
-            fecha: new Date(Date.now() - 3600000).toLocaleString('es-AR'),
-            peso: 1.2,
-            fecha_lectura: new Date(Date.now() - 3600000).toISOString()
-          }
-        ]
-        setLecturas(ejemploLecturas)
-        showAlert('Tabla lecturas_balanza no encontrada. Mostrando datos de ejemplo.', 'error')
-        return
-      }
+      // Asegurar detección de estructura primero
+      const { tabla, fecha } = await detectarEstructura()
 
       // Si la tabla existe, hacer la consulta completa (intentar con producto_id)
-      let lecturasData, lecturasError
+      let lecturasData: any, lecturasError: any
       
       // Primero intentar con producto_id
-      const queryWithProduct = await supabase
-        .from('lecturas_balanza')
-        .select(`
-          id,
-          fecha_lectura,
-          peso,
-          producto_id
-        `)
-        .order('fecha_lectura', { ascending: false })
+      const columnsWithProduct = `id, ${fecha}, peso, producto_id`
+      const queryWithProduct: any = await supabase
+        .from(tabla as any)
+        .select(columnsWithProduct as any)
+        .order(fecha, { ascending: false })
         .limit(50)
       
       if (queryWithProduct.error && queryWithProduct.error.message.includes('producto_id')) {
         // Si falla, intentar sin producto_id
-        const queryWithoutProduct = await supabase
-          .from('lecturas_balanza')
-          .select(`
-            id,
-            fecha_lectura,
-            peso
-          `)
-          .order('fecha_lectura', { ascending: false })
+        const columnsWithoutProduct = `id, ${fecha}, peso`
+        const queryWithoutProduct: any = await supabase
+          .from(tabla as any)
+          .select(columnsWithoutProduct as any)
+          .order(fecha, { ascending: false })
           .limit(50)
         
         lecturasData = queryWithoutProduct.data
@@ -116,39 +121,40 @@ export default function BalanzaPage() {
         lecturasError = queryWithProduct.error
       }
 
-      if (lecturasError) {
+      if (lecturasError && (lecturasError as any).message) {
         console.error('Error al cargar lecturas:', lecturasError)
-        showAlert(`Error al cargar lecturas: ${lecturasError.message}`, 'error')
+        showAlert(`Error al cargar lecturas: ${(lecturasError as any).message}`, 'error')
         return
       }
 
       // Si hay lecturas, intentar obtener información de productos asociados
       const lecturasConProductos = []
-      for (const lectura of lecturasData || []) {
+      const filas: any[] = Array.isArray(lecturasData) ? (lecturasData as any[]) : []
+      for (const lecturaAny of filas) {
         let productoInfo = null
         
         // Solo buscar producto si la columna producto_id existe y tiene valor
-        if ((lectura as any).producto_id) {
+        if (lecturaAny.producto_id) {
           const { data: productoData } = await supabase
             .from('productos')
             .select('id, codigo, nombre, precio, unidad_medida')
-            .eq('id', (lectura as any).producto_id)
+            .eq('id', lecturaAny.producto_id)
             .single()
           
           productoInfo = productoData
         }
 
         lecturasConProductos.push({
-          id: lectura.id.toString(),
-          fecha: new Date(lectura.fecha_lectura).toLocaleString('es-AR'),
-          peso: lectura.peso,
-          producto_id: (lectura as any).producto_id || null,
+          id: String(lecturaAny.id),
+          fecha: new Date(lecturaAny[fecha]).toLocaleString('es-AR'),
+          peso: lecturaAny.peso,
+          producto_id: lecturaAny.producto_id || null,
           producto_nombre: productoInfo?.nombre,
           producto_codigo: productoInfo?.codigo,
           precio_por_unidad: productoInfo?.precio,
           unidad_medida: productoInfo?.unidad_medida,
-          total_calculado: productoInfo?.precio ? (lectura.peso * productoInfo.precio) : 0,
-          fecha_lectura: lectura.fecha_lectura
+          total_calculado: productoInfo?.precio ? (lecturaAny.peso * productoInfo.precio) : 0,
+          fecha_lectura: lecturaAny[fecha]
         })
       }
 
@@ -204,7 +210,7 @@ export default function BalanzaPage() {
       ]
 
       const { error: insertError } = await supabase
-        .from('lecturas_balanza')
+        .from(tablaLecturas as any)
         .insert(lecturasEjemplo)
 
       if (!insertError) {
@@ -238,31 +244,7 @@ export default function BalanzaPage() {
     }
   }
 
-  // Función para conectar con la balanza en tiempo real (opcional)
-  const fetchBalanzaData = async () => {
-    try {
-      const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), 3000)
-
-      const response = await fetch("http://localhost:3000/lectura", {
-        method: 'GET',
-        headers: { 'Content-Type': 'application/json' },
-        signal: controller.signal
-      })
-
-      clearTimeout(timeoutId)
-
-      if (response.ok) {
-        const data = await response.json()
-        if (typeof data.peso === "number") {
-          setPesoActual(data.peso)
-          setIsConnected(true)
-        }
-      }
-    } catch (error) {
-      setIsConnected(false)
-    }
-  }
+  // Eliminado: conexión directa a localhost de la balanza. Solo usamos Supabase.
 
   // Función para asociar un producto con una lectura
   const handleAsociarProducto = async () => {
@@ -277,7 +259,7 @@ export default function BalanzaPage() {
     try {
       // Intentar guardar la asociación en la base de datos
       const { error } = await supabase
-        .from('lecturas_balanza')
+        .from(tablaLecturas as any)
         .update({ producto_id: selectedProducto })
         .eq('id', selectedLectura.id)
 
@@ -310,13 +292,19 @@ export default function BalanzaPage() {
   useEffect(() => {
     fetchLecturasFromDB()
     fetchProductos()
+
+    // Suscripción realtime a inserciones/actualizaciones de lecturas desde Supabase
+    const channel = supabase
+      .channel('lecturas_balanza_changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: tablaLecturas as any }, () => {
+        fetchLecturasFromDB()
+      })
+      .subscribe()
     
-    // Intentar conectar con la balanza
-    fetchBalanzaData()
-    const interval = setInterval(fetchBalanzaData, 3000)
-    
-    return () => clearInterval(interval)
-  }, [])
+    return () => {
+      try { supabase.removeChannel(channel) } catch {}
+    }
+  }, [tablaLecturas])
 
   // Lecturas del día actual
   const hoy = new Date()
@@ -370,18 +358,7 @@ export default function BalanzaPage() {
         </div>
       </div>
 
-      {/* Banner de conexión */}
-      {isConnected ? (
-        <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-          <div className="flex items-center gap-2">
-            <div className="w-3 h-3 bg-green-500 rounded-full animate-pulse"></div>
-            <span className="font-medium text-green-800">Balanza Conectada</span>
-          </div>
-          <p className="text-sm text-green-700 mt-1">
-            Recibiendo datos... Peso actual: <strong>{pesoActual.toFixed(3)} kg</strong>
-          </p>
-        </div>
-      ) : null}
+      {/* Sin conexión directa a dispositivo: solo datos desde Supabase */}
 
       {/* Stats Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
