@@ -1,6 +1,7 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
+import { useRouter } from "next/navigation"
 import { supabase } from "@/lib/supabaseClient"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -35,6 +36,7 @@ interface Producto {
 }
 
 export default function BalanzaPage() {
+  const router = useRouter()
   const [lecturas, setLecturas] = useState<LecturaBalanza[]>([])
   const [productos, setProductos] = useState<Producto[]>([])
   const [searchTerm, setSearchTerm] = useState("")
@@ -44,6 +46,7 @@ export default function BalanzaPage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [productSearchTerm, setProductSearchTerm] = useState('')
   const [showProductSuggestions, setShowProductSuggestions] = useState(false)
+  const productSearchRef = useRef<HTMLInputElement | null>(null)
   const { showAlert } = useAlert()
   // Estado para compatibilidad con distintos nombres de tabla/columnas
   const [tablaLecturas, setTablaLecturas] = useState<string>('lecturas_balanza')
@@ -84,6 +87,31 @@ export default function BalanzaPage() {
     }
     // Si no encontró ninguna, mantener valores por defecto
     return { tabla: 'lecturas_balanza', fecha: 'fecha_lectura' }
+  }
+
+  // Obtener la última lectura REAL desde BD (independiente del payload)
+  const fetchUltimaLectura = async (): Promise<LecturaBalanza | null> => {
+    const { tabla, fecha } = await detectarEstructura()
+    const { data, error } = await supabase
+      .from(tabla as any)
+      .select(`id, ${fecha}, peso, producto_id` as any)
+      .order(fecha, { ascending: false })
+      .limit(1)
+    if (error || !data || data.length === 0) return null
+    const r: any = data[0]
+    const fechaVal = r[fecha]
+    return {
+      id: String(r.id),
+      fecha: new Date(fechaVal).toLocaleString('es-AR'),
+      peso: Number(r.peso || 0),
+      producto_id: r.producto_id || null,
+      producto_nombre: undefined,
+      producto_codigo: undefined,
+      precio_por_unidad: undefined,
+      unidad_medida: undefined,
+      total_calculado: undefined,
+      fecha_lectura: fechaVal,
+    }
   }
 
   // Cargar datos de la base de datos
@@ -283,39 +311,95 @@ export default function BalanzaPage() {
       setSelectedProducto('')
       setProductSearchTerm('')
       setShowProductSuggestions(false)
+      // Ir a realizar venta para continuar el flujo
+      router.push('/dashboard/ventas/nueva')
     } catch (error) {
       console.error('Error:', error)
       showAlert('Error al procesar la solicitud', 'error')
     }
   }
 
+  // Enfoque automático del input al abrir el diálogo
+  useEffect(() => {
+    if (isDialogOpen) {
+      setTimeout(() => productSearchRef.current?.focus(), 0)
+    }
+  }, [isDialogOpen])
+
+  // Atajo: Enter abre el diálogo para la última lectura sin producto asociado
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Enter' && !isDialogOpen) {
+        // Buscar la lectura más reciente sin producto asociado
+        const sinProducto = [...lecturas]
+          .filter(l => !l.producto_id)
+          .sort((a, b) => new Date(b.fecha_lectura).getTime() - new Date(a.fecha_lectura).getTime())
+        if (sinProducto.length > 0) {
+          e.preventDefault()
+          setSelectedLectura(sinProducto[0])
+          setSelectedProducto('')
+          setProductSearchTerm('')
+          setIsDialogOpen(true)
+        }
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [lecturas, isDialogOpen])
+
+  // Carga inicial y suscripción realtime
   useEffect(() => {
     fetchLecturasFromDB()
     fetchProductos()
 
-    // Suscripción realtime a inserciones/actualizaciones de lecturas desde Supabase
+    // Suscripción realtime: inserciones se reflejan al instante y cambios disparan refresh
     const channel = supabase
       .channel('lecturas_balanza_changes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: tablaLecturas as any }, () => {
-        fetchLecturasFromDB()
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: tablaLecturas as any }, async () => {
+        // Siempre traer la última lectura real desde BD para evitar desfasajes
+        const ultima = await fetchUltimaLectura()
+        if (ultima) {
+          setLecturas(prev => [ultima, ...prev.filter(l => l.id !== ultima.id)].slice(0, 50))
+        } else {
+          fetchLecturasFromDB()
+        }
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: tablaLecturas as any }, async () => {
+        const ultima = await fetchUltimaLectura()
+        if (ultima) {
+          setLecturas(prev => [ultima, ...prev.filter(l => l.id !== ultima.id)].slice(0, 50))
+        } else {
+          fetchLecturasFromDB()
+        }
       })
       .subscribe()
-    
-    return () => {
-      try { supabase.removeChannel(channel) } catch {}
-    }
-  }, [tablaLecturas])
 
-  // Lecturas del día actual
+    return () => { try { supabase.removeChannel(channel) } catch {} }
+  }, [tablaLecturas, columnaFecha])
+
+  // Polling muy liviano como respaldo solo cuando la pestaña está visible
+  useEffect(() => {
+    let interval: any
+    const start = () => {
+      if (interval) return
+      interval = setInterval(() => { if (!document.hidden) fetchLecturasFromDB() }, 1500)
+    }
+    const stop = () => { if (interval) { clearInterval(interval); interval = null } }
+    start()
+    const onVis = () => { if (document.hidden) stop(); else start() }
+    document.addEventListener('visibilitychange', onVis)
+    return () => { stop(); document.removeEventListener('visibilitychange', onVis) }
+  }, [])
+
+  // Lecturas del día y del mes
   const hoy = new Date()
-  const lecturasHoy = lecturas.filter(l => {
-    const fecha = new Date(l.fecha_lectura)
-    return fecha.getDate() === hoy.getDate() && fecha.getMonth() === hoy.getMonth() && fecha.getFullYear() === hoy.getFullYear()
-  })
-  // Lecturas del mes actual
   const lecturasMes = lecturas.filter(l => {
     const fecha = new Date(l.fecha_lectura)
     return fecha.getMonth() === hoy.getMonth() && fecha.getFullYear() === hoy.getFullYear()
+  })
+  const lecturasHoy = lecturas.filter(l => {
+    const fecha = new Date(l.fecha_lectura)
+    return fecha.getDate() === hoy.getDate() && fecha.getMonth() === hoy.getMonth() && fecha.getFullYear() === hoy.getFullYear()
   })
 
   const filteredLecturas = lecturas.filter((lectura) => {
@@ -537,6 +621,30 @@ export default function BalanzaPage() {
                     id="producto-search"
                     placeholder="Escribe el nombre o código del producto..."
                     value={productSearchTerm}
+                    ref={productSearchRef}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault()
+                        // Intentar match exacto por código
+                        const exact = productos.find(p => p.codigo.toLowerCase() === productSearchTerm.toLowerCase())
+                        if (exact) {
+                          setSelectedProducto(exact.id)
+                          setProductSearchTerm(`${exact.nombre} (${exact.codigo})`)
+                          setShowProductSuggestions(false)
+                          // Asociar de inmediato
+                          setTimeout(() => handleAsociarProducto(), 0)
+                          return
+                        }
+                        // Si no hay exacto, tomar el primer sugerido si existe
+                        if (filteredProductos.length > 0) {
+                          const first = filteredProductos[0]
+                          setSelectedProducto(first.id)
+                          setProductSearchTerm(`${first.nombre} (${first.codigo})`)
+                          setShowProductSuggestions(false)
+                          setTimeout(() => handleAsociarProducto(), 0)
+                        }
+                      }
+                    }}
                     onChange={(e) => {
                       setProductSearchTerm(e.target.value)
                       setShowProductSuggestions(e.target.value.length > 0)
