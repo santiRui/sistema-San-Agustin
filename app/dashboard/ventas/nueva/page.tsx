@@ -67,6 +67,11 @@ export default function RealizarVentaPage() {
   const [clientes, setClientes] = useState<Cliente[]>([]);
   const [lecturasBalanza, setLecturasBalanza] = useState<LecturaBalanza[]>([]);
   const [lecturasProductoSeleccionado, setLecturasProductoSeleccionado] = useState<LecturaBalanza[]>([]);
+  // Lista de lecturas con producto para panel lateral ergonómico
+  const [lecturasConProductoLista, setLecturasConProductoLista] = useState<LecturaBalanza[]>([]);
+  // Todas las lecturas para stats/historial compacto
+  const [lecturasTodas, setLecturasTodas] = useState<LecturaBalanza[]>([]);
+  const [searchLecturasTerm, setSearchLecturasTerm] = useState('');
   
   const [clienteId, setClienteId] = useState<string | null>(null);
   const [metodoPago, setMetodoPago] = useState("");
@@ -90,15 +95,18 @@ export default function RealizarVentaPage() {
   const assocInputRef = useRef<HTMLInputElement | null>(null);
   const [lecturaParaAsociar, setLecturaParaAsociar] = useState<LecturaBalanza | null>(null);
   // CTA dinámico: 'associate' cuando hay pesaje sin producto, 'process' cuando todo listo
-  const [ctaMode, setCtaMode] = useState<'associate'|'process'>('associate');
+  const [ctaMode, setCtaMode] = useState<'associate' | 'process'>('associate');
   const associateBtnRef = useRef<HTMLButtonElement | null>(null);
   const processBtnRef = useRef<HTMLButtonElement | null>(null);
   // Editar datos de venta
   const [isEditSaleInfoOpen, setIsEditSaleInfoOpen] = useState(false);
   // Estado de procesamiento de venta
   const [isProcessing, setIsProcessing] = useState(false);
+  // Estado para evitar múltiples asociaciones por Enter repetido
+  const [isAssociating, setIsAssociating] = useState(false);
+  // Última lectura absoluta (aunque no esté disponible para asociar)
+  const [lastAnyLectura, setLastAnyLectura] = useState<Pick<LecturaBalanza, 'id'|'peso'|'fecha_lectura'|'fecha'> | null>(null);
 
-  const selectedProduct = productos.find(p => p.id === productoSeleccionadoId);
   // Asegurar cliente por defecto "Venta General"
   const ensureClienteGeneral = async (): Promise<string> => {
     // Buscar en estado primero
@@ -131,40 +139,50 @@ export default function RealizarVentaPage() {
     setClientes((prev) => [...prev, { id: insertData.id, nombre: 'Venta', apellido: 'General', numero_documento: '00000000' }]);
     return insertData.id as string;
   };
+  
+  // Producto seleccionado derivado
+  const selectedProduct = productos.find(p => p.id === productoSeleccionadoId);
   // Detección de tabla y columna de fecha para lecturas de balanza
+  // Cachear estructura detectada para evitar re-consultas repetidas
+  const lecturasTablaRef = useRef<string | null>(null);
+  const lecturasFechaColRef = useRef<string | null>(null);
+  // Evitar solapamiento de fetch y aplicar solo resultados más recientes
+  const isFetchingRef = useRef<boolean>(false);
+  const lastFechaRef = useRef<number>(0);
+  const lastIdRef = useRef<string | null>(null);
+  const isLightFetchingRef = useRef<boolean>(false);
+  // Comparador de "más reciente" por (timestamp, id)
+  const isNewer = (ts: number, idStr: string) => {
+    if (ts > lastFechaRef.current) return true;
+    if (ts < lastFechaRef.current) return false;
+    // mismo timestamp: desempatar por id (string compare estable)
+    if (!lastIdRef.current) return true;
+    return idStr > lastIdRef.current;
+  };
   const detectarEstructuraLecturas = async () => {
-    const posiblesTablas = ['lecturas_balanza', 'lectura_balanza', 'lecturas_de_balanza', 'lectura_de_balanza'];
-    for (const t of posiblesTablas) {
-      const { error } = await supabase.from(t as any).select('id').limit(1);
-      if (!error) {
-        const candidatosFecha = ['fecha_lectura', 'fecha', 'created_at'];
-        for (const c of candidatosFecha) {
-          const { error: eFecha } = await supabase.from(t as any).select(`id, ${c}` as any).limit(1);
-          if (!eFecha) return { tabla: t, fecha: c };
-        }
-        return { tabla: t, fecha: 'fecha_lectura' };
-      }
-    }
-    return { tabla: 'lecturas_balanza', fecha: 'fecha_lectura' };
+    // Hardcodeado según esquema provisto: lecturas_balanza(fecha_lectura)
+    if (!lecturasTablaRef.current) lecturasTablaRef.current = 'lecturas_balanza';
+    if (!lecturasFechaColRef.current) lecturasFechaColRef.current = 'fecha_lectura';
+    return { tabla: 'lecturas_balanza', fecha: 'fecha_lectura' } as { tabla: string, fecha: string };
   }
 
   // Función para cargar datos de pesaje
   const fetchLecturasBalanza = async () => {
+    if (isFetchingRef.current) return;
+    isFetchingRef.current = true;
     try {
-      // Evitar trabajo extra mientras se procesa una venta
-      if (isProcessing) return;
+      // Siempre refrescar lecturas, incluso mientras se procesa una venta
       const { tabla, fecha } = await detectarEstructuraLecturas();
       const colsBase = `id, ${fecha}, peso, producto_id`;
       const colsExtras = `usado, id_venta`;
-      // Intentar con columnas extra y filtros (solo pesajes disponibles)
+      // Traer últimas lecturas sin filtrar en BD (evita perder filas con NULL en usado/id_venta)
       let lecturasData: any, lecturasError: any;
       try {
         const q = supabase
           .from(tabla as any)
           .select(`${colsBase}, ${colsExtras}` as any)
-          .eq('usado', false)
-          .is('id_venta', null)
           .order(fecha, { ascending: false })
+          .order('id', { ascending: false })
           .limit(100) as any;
         const res = await q;
         lecturasData = res.data;
@@ -220,11 +238,30 @@ export default function RealizarVentaPage() {
         });
       }
 
-      // Guardar únicamente la ÚLTIMA lectura disponible sin producto asignado
-      const soloDisponibles = lecturasConProductos.filter(l => !l.producto_id);
-      setLecturasBalanza(soloDisponibles.slice(0, 1));
+      // Aplicar solo si la respuesta es más reciente que la última aplicada
+      const top = lecturasConProductos[0];
+      const topTime = top ? new Date(top.fecha_lectura).getTime() : 0;
+      if (topTime >= lastFechaRef.current) {
+        lastFechaRef.current = topTime;
+        // Guardar última lectura absoluta para feedback (aunque no esté disponible)
+        if (lecturasConProductos.length > 0) {
+          const u = lecturasConProductos[0];
+          setLastAnyLectura({ id: u.id, peso: u.peso, fecha_lectura: u.fecha_lectura, fecha: u.fecha });
+        }
+        // Guardar únicamente la ÚLTIMA lectura disponible sin producto asignado
+        // Tratar NULL como disponible (solo excluir true o id_venta no nulo)
+        const soloDisponibles = lecturasConProductos.filter(l => !l.producto_id && !(l.usado === true || (l.id_venta !== null && l.id_venta !== undefined)));
+        setLecturasBalanza(soloDisponibles.slice(0, 1));
+        // Guardar lecturas con producto para panel lateral (limitar)
+        const conProducto = lecturasConProductos.filter(l => !!l.producto_id).slice(0, 50);
+        setLecturasConProductoLista(conProducto);
+        // Guardar todas para stats/historial
+        setLecturasTodas(lecturasConProductos);
+      }
     } catch (error) {
       console.error('Error al cargar datos de pesaje:', error);
+    } finally {
+      isFetchingRef.current = false;
     }
   };
 
@@ -246,50 +283,55 @@ export default function RealizarVentaPage() {
     return () => window.removeEventListener('keydown', handler);
   }, []);
 
-  // Suscripción realtime a nuevas lecturas para actualización inmediata
+  // Suscripción realtime a nuevas lecturas (todas las tablas existentes) para actualización inmediata
   useEffect(() => {
-    const posiblesTablas = ['lecturas_balanza', 'lectura_balanza', 'lecturas_de_balanza', 'lectura_de_balanza'];
-    // Helper: obtener última lectura real desde BD
-    const fetchUltimaLecturaVentas = async () => {
-      const { tabla, fecha } = await detectarEstructuraLecturas();
-      const { data, error } = await supabase
-        .from(tabla as any)
-        .select(`id, ${fecha}, peso, producto_id` as any)
-        .order(fecha, { ascending: false })
-        .limit(1);
-      if (error || !data || data.length === 0) return null;
-      const r: any = data[0];
-      return {
-        id: String(r.id),
-        fecha: new Date(r[fecha]).toLocaleString('es-AR'),
-        peso: Number(r.peso || 0),
-        producto_id: r.producto_id || null,
-        fecha_lectura: r[fecha],
-      } as any;
-    };
+    let channels: any[] = [];
+    let mounted = true;
 
-    const channels = posiblesTablas.map((t) => {
-      return supabase
+    const setup = async () => {
+      const t = 'lecturas_balanza';
+      const fechaCol = 'fecha_lectura';
+      const ch = supabase
         .channel(`rt_${t}`)
-        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: t as any }, async () => {
-          const ultima = await fetchUltimaLecturaVentas();
-          if (ultima && !ultima.producto_id) {
-            setLecturasBalanza([ultima]);
-          } else {
-            fetchLecturasBalanza();
-          }
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: t as any }, (payload: any) => {
+              const row: any = payload?.new || {};
+              const peso = Number(row.peso || 0);
+              const producto_id = row.producto_id || null;
+              const fechaVal = row[fechaCol];
+              const idStr = String(row.id);
+              const ts = fechaVal ? new Date(fechaVal).getTime() : 0;
+              // Ignorar eventos viejos y actualizar referencias cuando sea más nuevo
+              if (fechaVal) {
+                if (isNewer(ts, idStr)) {
+                  lastFechaRef.current = ts;
+                  lastIdRef.current = idStr;
+                  setLastAnyLectura({ id: idStr, peso, fecha_lectura: fechaVal, fecha: new Date(fechaVal).toLocaleString('es-AR') });
+                  // Si la lectura no tiene producto, empujarla como última sin reconsultar
+                  if (!producto_id && typeof peso === 'number') {
+                    const nueva = {
+                      id: idStr,
+                      fecha: new Date(fechaVal).toLocaleString('es-AR'),
+                      peso,
+                      producto_id: producto_id,
+                      fecha_lectura: fechaVal,
+                    } as any;
+                    setLecturasBalanza([nueva]);
+                  } else {
+                    // Para otros cambios o payloads incompletos, refrescar en segundo plano
+                    setTimeout(() => { fetchLecturasBalanza().catch(() => {}) }, 0);
+                  }
+                }
+              }
         })
         .on('postgres_changes', { event: '*', schema: 'public', table: t as any }, () => {
-          fetchLecturasBalanza();
+          setTimeout(() => { fetchLecturasBalanza().catch(() => {}) }, 0);
         })
         .subscribe();
-    });
-
-    return () => {
-      channels.forEach((ch) => {
-        try { supabase.removeChannel(ch) } catch {}
-      });
+      channels.push(ch);
     };
+
+    setup();
+    return () => { mounted = false; channels.forEach((ch) => { try { supabase.removeChannel(ch) } catch {} }); };
   }, []);
 
   // Enfoque del diálogo de asociación
@@ -325,38 +367,24 @@ export default function RealizarVentaPage() {
     fetchData();
   }, []);
 
-  // Polling continuo para detectar nuevos pesajes disponibles
+  // Polling continuo para detectar nuevos pesajes disponibles (siempre activo mientras el componente está montado)
   useEffect(() => {
-    const startPolling = () => {
-      if (pollingRef.current) return;
+    if (!pollingRef.current) {
       pollingRef.current = setInterval(async () => {
         await fetchLecturasBalanza();
-      }, 80); // consulta cada 80ms para detectar aún más rápido
-    };
-    const stopPolling = () => {
+      }, 30); // refresco ultra frecuente
+    }
+    return () => {
       if (pollingRef.current) {
         clearInterval(pollingRef.current);
         pollingRef.current = null;
       }
     };
-
-    // Pausar cuando la pestaña no está visible
-    const handleVisibility = () => {
-      if (document.hidden) stopPolling();
-      else startPolling();
-    };
-
-    startPolling();
-    document.addEventListener('visibilitychange', handleVisibility);
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibility);
-      stopPolling();
-    };
   }, []);
 
   // Cuando cambian las lecturas, buscar la más reciente disponible y activar modo pesaje
   useEffect(() => {
-    const disponibles = lecturasBalanza.filter(l => l.precio_por_unidad && !(l.usado || l.id_venta));
+    const disponibles = lecturasBalanza.filter(l => !(l.usado || l.id_venta));
     if (disponibles.length === 0) return;
     // Ordenar por fecha_lectura descendente (ya viene ordenado, pero por seguridad)
     const masReciente = disponibles[0];
@@ -368,6 +396,66 @@ export default function RealizarVentaPage() {
       // No enfocar el input de producto; dejamos el foco en el CTA superior
     }
   }, [lecturasBalanza]);
+
+  // Refuerzo: mini-fetch de la última lectura (limit 1) para evitar intermitencias
+  const fetchUltimaLecturaLight = async () => {
+    if (isLightFetchingRef.current) return;
+    isLightFetchingRef.current = true;
+    try {
+      const { tabla, fecha } = await detectarEstructuraLecturas();
+      const { data, error } = await supabase
+        .from(tabla as any)
+        .select(`id, ${fecha}, peso, producto_id, usado, id_venta` as any)
+        .order(fecha, { ascending: false })
+        .order('id', { ascending: false })
+        .limit(1);
+      if (error || !data || data.length === 0) return;
+      const r: any = data[0];
+      const fechaVal = r[fecha];
+      const ts = new Date(fechaVal).getTime();
+      const idStr = String(r.id);
+      // Solo aplicar si es más nuevo que lo último aplicado
+      if (ts >= lastFechaRef.current && idStr !== lastIdRef.current) {
+        lastFechaRef.current = ts;
+        lastIdRef.current = idStr;
+        const entrada = {
+          id: idStr,
+          fecha: new Date(fechaVal).toLocaleString('es-AR'),
+          peso: Number(r.peso || 0),
+          producto_id: r.producto_id || null,
+          fecha_lectura: fechaVal,
+          usado: r.usado ?? undefined,
+          id_venta: r.id_venta ?? null,
+        } as LecturaBalanza;
+        // Actualizar feedback de última lectura
+        setLastAnyLectura({ id: entrada.id, peso: entrada.peso, fecha_lectura: entrada.fecha_lectura, fecha: entrada.fecha });
+        // Si está disponible (sin producto y no usada), mostrarla como última disponible
+        const disponible = !entrada.producto_id && !(entrada.usado === true || (entrada.id_venta !== null && entrada.id_venta !== undefined));
+        if (disponible) {
+          setLecturasBalanza([entrada]);
+        }
+      }
+    } catch (e) {
+      // silenciar errores intermitentes
+    } finally {
+      isLightFetchingRef.current = false;
+    }
+  };
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      fetchUltimaLecturaLight();
+    }, 30);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Hard refresh de seguridad cada 2s: fuerza sincronización completa
+  useEffect(() => {
+    const hard = setInterval(() => {
+      fetchLecturasBalanza().catch(() => {});
+    }, 2000);
+    return () => clearInterval(hard);
+  }, []);
 
   const lecturasDisponibles = lecturasBalanza.filter(l => !(l.usado || l.id_venta) && !items.some(i => i.lectura_id === l.id));
   const latestLectura = lecturasDisponibles.length > 0 ? lecturasDisponibles[0] : null;
@@ -396,6 +484,28 @@ export default function RealizarVentaPage() {
       setTimeout(() => processBtnRef.current?.focus(), 0);
     }
   }, [ctaMode]);
+
+  // Stats e historial compacto al estilo balanza
+  const hoy = new Date();
+  const lecturasMes = lecturasTodas.filter(l => {
+    const f = new Date(l.fecha_lectura);
+    return f.getMonth() === hoy.getMonth() && f.getFullYear() === hoy.getFullYear();
+  });
+  const lecturasHoy = lecturasTodas.filter(l => {
+    const f = new Date(l.fecha_lectura);
+    return f.getDate() === hoy.getDate() && f.getMonth() === hoy.getMonth() && f.getFullYear() === hoy.getFullYear();
+  });
+  const totalPesoLecturas = lecturasTodas.reduce((sum, l) => sum + (l.peso || 0), 0);
+  const totalValorLecturas = lecturasTodas.reduce((sum, l) => sum + (l.total_calculado || 0), 0);
+  const filteredLecturasVentas = lecturasTodas.filter((l) => {
+    const term = searchLecturasTerm.trim().toLowerCase();
+    if (!term) return true;
+    return (
+      (l.producto_nombre || '').toLowerCase().includes(term) ||
+      (l.producto_codigo || '').toLowerCase().includes(term) ||
+      (l.fecha || '').toLowerCase().includes(term)
+    );
+  });
 
   const normalize = (v: any) => String(v ?? '').trim().toLowerCase();
   const bestMatchProducto = (term: string): Producto | undefined => {
@@ -466,47 +576,67 @@ export default function RealizarVentaPage() {
 
   const handleConfirmAssociate = async () => {
     if (!lecturaParaAsociar) return;
-    const match = bestMatchProducto(assocSearchTerm);
-    if (!match) {
-      showAlert('No se encontró un producto para ese código.', 'error');
-      return;
-    }
-    // Validar stock suficiente antes de agregar desde pesaje
+    if (isAssociating) return;
+    setIsAssociating(true);
     try {
-      const producto = productos.find(p => p.id === match.id);
-      if (!producto) throw new Error('Producto no encontrado.');
-      // lectura.peso está en kg; convertir a unidad base del producto
-      let requeridoEnBase = lecturaParaAsociar.peso;
-      if (producto.unidad_medida === 'gramos') requeridoEnBase = lecturaParaAsociar.peso * 1000;
-      if (requeridoEnBase > producto.stock) {
-        showAlert(`Stock insuficiente para ${producto.nombre}. Disponible: ${producto.stock} ${producto.unidad_medida}.`, 'error');
+      // Evitar duplicado del mismo pesaje por Enter repetido
+      if (items.some(i => i.lectura_id === lecturaParaAsociar.id)) {
+        showAlert('Este pesaje ya está en el carrito.', 'error');
         return;
       }
-    } catch (e) {
-      console.error(e);
+
+      const match = bestMatchProducto(assocSearchTerm);
+      if (!match) {
+        showAlert('No se encontró un producto para ese código.', 'error');
+        return;
+      }
+
+      // Validar stock suficiente antes de agregar desde pesaje
+      try {
+        const producto = productos.find(p => p.id === match.id);
+        if (!producto) throw new Error('Producto no encontrado.');
+        // lectura.peso está en kg; convertir a unidad base del producto
+        let requeridoEnBase = lecturaParaAsociar.peso;
+        if (producto.unidad_medida === 'gramos') requeridoEnBase = lecturaParaAsociar.peso * 1000;
+        if (requeridoEnBase > producto.stock) {
+          showAlert(`Stock insuficiente para ${producto.nombre}. Disponible: ${producto.stock} ${producto.unidad_medida}.`, 'error');
+          return;
+        }
+      } catch (e) {
+        console.error(e);
+      }
+
+      await asociarProductoEnDB(lecturaParaAsociar.id, match.id);
+
+      // Doble verificación anti-duplicado por condiciones de carrera
+      if (items.some(i => i.lectura_id === lecturaParaAsociar.id)) {
+        return;
+      }
+
+      // Agregar directamente el item usando el match
+      const nuevoItem: VentaItem = {
+        id: `pesaje-${lecturaParaAsociar.id}-${Date.now()}`,
+        producto_id: match.id,
+        nombre: match.nombre,
+        precio: match.precio,
+        cantidad: lecturaParaAsociar.peso,
+        unidad_medida: 'kg',
+        subtotal: (match.precio ?? 0) * lecturaParaAsociar.peso,
+        lectura_id: lecturaParaAsociar.id,
+      };
+      setItems(prev => [...prev, nuevoItem]);
+      setIsAssocDialogOpen(false);
+      setLecturaParaAsociar(null);
+      setAssocSearchTerm('');
+      // Refrescar lecturas para que figure como asociada
+      await fetchLecturasBalanza();
+      // Cambiar CTA a procesar si no quedan sin asociar
+      if (!hasUnassociated) setCtaMode('process');
+      // Enfocar botón de procesar para que Enter cierre la venta
+      setTimeout(() => processBtnRef.current?.focus(), 0);
+    } finally {
+      setIsAssociating(false);
     }
-    await asociarProductoEnDB(lecturaParaAsociar.id, match.id);
-    // Agregar directamente el item usando el match
-    const nuevoItem: VentaItem = {
-      id: `pesaje-${lecturaParaAsociar.id}-${Date.now()}`,
-      producto_id: match.id,
-      nombre: match.nombre,
-      precio: match.precio,
-      cantidad: lecturaParaAsociar.peso,
-      unidad_medida: 'kg',
-      subtotal: (match.precio ?? 0) * lecturaParaAsociar.peso,
-      lectura_id: lecturaParaAsociar.id,
-    };
-    setItems(prev => [...prev, nuevoItem]);
-    setIsAssocDialogOpen(false);
-    setLecturaParaAsociar(null);
-    setAssocSearchTerm('');
-    // Refrescar lecturas para que figure como asociada
-    await fetchLecturasBalanza();
-    // Cambiar CTA a procesar si no quedan sin asociar
-    if (!hasUnassociated) setCtaMode('process');
-    // Enfocar botón de procesar para que Enter cierre la venta
-    setTimeout(() => processBtnRef.current?.focus(), 0);
   };
 
   useEffect(() => {
@@ -891,7 +1021,13 @@ export default function RealizarVentaPage() {
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <div className="flex items-center gap-4 min-w-0">
               <div className="text-sm text-gray-600 truncate">
-                {hasUnassociated ? 'Hay un pesaje sin producto asociado' : items.length > 0 ? 'Listo para procesar' : 'Esperando pesaje...'}
+                {hasUnassociated 
+                  ? 'Hay un pesaje sin producto asociado'
+                  : items.length > 0 
+                    ? 'Listo para procesar'
+                    : lastAnyLectura 
+                      ? `Última lectura registrada: ${Number(lastAnyLectura.peso || 0).toFixed(3)} kg (no disponible para asociar)`
+                      : 'Esperando pesaje...'}
               </div>
               {latestLectura && (
                 <div className="flex items-center gap-3 text-sm">
@@ -979,8 +1115,10 @@ export default function RealizarVentaPage() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setIsAssocDialogOpen(false)}>Cancelar</Button>
-            <Button onClick={handleConfirmAssociate}>Asociar y agregar</Button>
+            <Button variant="outline" onClick={() => setIsAssocDialogOpen(false)} disabled={isAssociating}>Cancelar</Button>
+            <Button onClick={handleConfirmAssociate} disabled={isAssociating} aria-busy={isAssociating}>
+              {isAssociating ? 'Asociando...' : 'Asociar y agregar'}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -1079,7 +1217,7 @@ export default function RealizarVentaPage() {
       {/* Sección inferior: Agregar productos e Items */}
       <div className="grid grid-cols-1 gap-4 sm:gap-6 mt-4">
         <div className="lg:col-span-2 space-y-4 sm:space-y-6">
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
             {/* Panel de Agregar Productos */}
             <Card>
               <CardHeader>
@@ -1267,7 +1405,50 @@ export default function RealizarVentaPage() {
               </CardContent>
             </Card>
 
-            {/* Panel de Datos de Pesaje eliminado por nuevo flujo */}
+            {/* Panel ergonómico de lecturas con producto asociado */}
+            <Card className="max-h-[520px] overflow-hidden">
+              <CardHeader>
+                <CardTitle>Pesajes con producto</CardTitle>
+                <CardDescription>Agregá al carrito con un click</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="overflow-y-auto max-h-[420px] pr-1">
+                  {lecturasConProductoLista.length === 0 ? (
+                    <div className="text-center py-8 text-gray-500">No hay pesajes asociados recientemente</div>
+                  ) : (
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="min-w-[120px]">Fecha</TableHead>
+                          <TableHead className="min-w-[90px]">Peso</TableHead>
+                          <TableHead>Producto</TableHead>
+                          <TableHead className="text-right">Total</TableHead>
+                          <TableHead></TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {lecturasConProductoLista.map((l) => (
+                          <TableRow key={l.id}>
+                            <TableCell className="font-mono text-xs">{l.fecha}</TableCell>
+                            <TableCell>{(l.peso ?? 0).toFixed(3)} kg</TableCell>
+                            <TableCell>
+                              <div className="truncate max-w-[160px]">{l.producto_nombre}</div>
+                              <div className="text-xs text-gray-500">${(l.precio_por_unidad ?? 0).toLocaleString()}/{l.unidad_medida || 'kg'}</div>
+                            </TableCell>
+                            <TableCell className="text-right font-semibold">${(l.total_calculado ?? (l.peso * (l.precio_por_unidad || 0))).toFixed(2)}</TableCell>
+                            <TableCell className="text-right">
+                              <Button size="sm" variant="outline" onClick={() => agregarItemDesdePesaje(l)} disabled={!!(l.usado || l.id_venta)}>
+                                Agregar
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
           </div>
 
           <Card>
