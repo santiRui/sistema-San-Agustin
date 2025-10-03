@@ -50,11 +50,45 @@ export default function VentasHechasPage() {
   const [isCalendarOpen, setIsCalendarOpen] = useState(false)
   const { showAlert } = useAlert();
 
+  // Filtros para tarjetas de estadísticas
+  const [selectedDayForStats, setSelectedDayForStats] = useState<Date | undefined>(new Date())
+  const [selectedMonthForStats, setSelectedMonthForStats] = useState<Date | undefined>(new Date())
+  const [isDayPickerOpen, setIsDayPickerOpen] = useState(false)
+  const [isMonthPickerOpen, setIsMonthPickerOpen] = useState(false)
+
+  // Helpers para cambio de mes/año
+  const handleMonthSelect = (monthStr: string) => {
+    const month = parseInt(monthStr, 10);
+    const base = selectedMonthForStats ?? new Date();
+    const updated = new Date(base.getFullYear(), month, 1, 0, 0, 0);
+    setSelectedMonthForStats(updated);
+  }
+  const handleYearSelect = (yearStr: string) => {
+    const year = parseInt(yearStr, 10);
+    const base = selectedMonthForStats ?? new Date();
+    const updated = new Date(year, base.getMonth(), 1, 0, 0, 0);
+    setSelectedMonthForStats(updated);
+  }
+
   // Estados para el modal de detalles
   const [selectedVenta, setSelectedVenta] = useState<VentaProcesada | null>(null)
   const [detallesVenta, setDetallesVenta] = useState<DetalleVenta[]>([])
   const [loadingDetails, setLoadingDetails] = useState(false)
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false)
+
+  // Mantener sincronizados el día del header y el filtro de la tabla
+  useEffect(() => {
+    // Si hay día seleccionado para stats, reflejarlo en el filtro inferior
+    if (selectedDayForStats) {
+      setSelectedDate(selectedDayForStats);
+    }
+  }, [selectedDayForStats]);
+
+  const handleSelectDayForStats = (d?: Date) => {
+    setSelectedDayForStats(d ?? undefined);
+    setSelectedDate(d ?? undefined); // unifica con filtro de tabla
+    setIsDayPickerOpen(false);
+  }
 
   useEffect(() => {
     const fetchVentas = async () => {
@@ -156,36 +190,39 @@ export default function VentasHechasPage() {
     return matchesSearch && matchesFilter && matchesDate
   })
 
-  // Obtener la fecha actual
+  // Utilidades de fecha
   const now = new Date();
-  const esMismoDia = (date: Date) =>
-    date.getDate() === now.getDate() &&
-    date.getMonth() === now.getMonth() &&
-    date.getFullYear() === now.getFullYear();
-  const esMismoMes = (date: Date) =>
-    date.getMonth() === now.getMonth() &&
-    date.getFullYear() === now.getFullYear();
+  const esMismoDia = (date: Date, ref: Date) =>
+    date.getDate() === ref.getDate() &&
+    date.getMonth() === ref.getMonth() &&
+    date.getFullYear() === ref.getFullYear();
+  const esMismoMes = (date: Date, ref: Date) =>
+    date.getMonth() === ref.getMonth() &&
+    date.getFullYear() === ref.getFullYear();
 
-  // Ventas del día (solo completadas)
-  const ventasDelDia = sales.filter(sale => sale.estado === "completada" && esMismoDia(sale.fechaDate));
+  // Ventas del día (solo completadas) según día seleccionado
+  const refDia = selectedDayForStats ?? now;
+  const ventasDelDia = sales.filter(sale => sale.estado === "completada" && esMismoDia(sale.fechaDate, refDia));
   const montoVentasDelDia = ventasDelDia.reduce((sum, sale) => sum + sale.total, 0);
   const cantidadVentasDelDia = ventasDelDia.length;
 
-  // Ventas del mes (solo completadas)
-  const ventasDelMes = sales.filter(sale => sale.estado === "completada" && esMismoMes(sale.fechaDate));
+  // Ventas del mes (solo completadas) según mes seleccionado
+  const refMes = selectedMonthForStats ?? now;
+  const ventasDelMes = sales.filter(sale => sale.estado === "completada" && esMismoMes(sale.fechaDate, refMes));
   const cantidadVentasDelMes = ventasDelMes.length;
 
-  // Ventas totales (todas completadas)
-  const ventasTotales = sales.filter(sale => sale.estado === "completada");
-  const montoVentasTotales = ventasTotales.reduce((sum, sale) => sum + sale.total, 0);
+  // Ventas totales (monto) del mes seleccionado
+  const montoVentasTotales = ventasDelMes.reduce((sum, sale) => sum + sale.total, 0);
 
   const handleDateSelect = (date: Date | undefined) => {
     setSelectedDate(date)
+    setSelectedDayForStats(date)
     setIsCalendarOpen(false)
   }
 
   const clearDateFilter = () => {
     setSelectedDate(undefined)
+    setSelectedDayForStats(undefined)
   }
 
   return (
@@ -203,6 +240,75 @@ export default function VentasHechasPage() {
         <p className="text-gray-600">Historial completo de todas las ventas realizadas</p>
       </div>
 
+      {/* Filtros para tarjetas */}
+      <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
+        <Popover open={isDayPickerOpen} onOpenChange={setIsDayPickerOpen}>
+          <PopoverTrigger asChild>
+            <Button variant="outline" className="w-full sm:w-auto">
+              <CalendarIcon className="mr-2 h-4 w-4" />
+              {selectedDayForStats ? `Día: ${format(selectedDayForStats, "dd/MM/yyyy", { locale: es })}` : "Seleccionar día"}
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent className="w-auto p-0" align="start">
+            <Calendar
+              mode="single"
+              selected={selectedDayForStats}
+              onSelect={handleSelectDayForStats}
+              initialFocus
+              locale={es}
+            />
+            {selectedDayForStats && (
+              <div className="p-3 border-t">
+                <Button variant="outline" size="sm" onClick={() => handleSelectDayForStats(undefined)} className="w-full bg-transparent">
+                  Limpiar día
+                </Button>
+              </div>
+            )}
+          </PopoverContent>
+        </Popover>
+
+        {/* Selector de Mes y Año (solo meses) */}
+        <div className="flex flex-col sm:flex-row gap-2">
+          <Select value={(selectedMonthForStats ?? new Date()).getMonth().toString()} onValueChange={handleMonthSelect}>
+            <SelectTrigger className="w-full sm:w-[160px]">
+              <SelectValue placeholder="Mes" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="0">Enero</SelectItem>
+              <SelectItem value="1">Febrero</SelectItem>
+              <SelectItem value="2">Marzo</SelectItem>
+              <SelectItem value="3">Abril</SelectItem>
+              <SelectItem value="4">Mayo</SelectItem>
+              <SelectItem value="5">Junio</SelectItem>
+              <SelectItem value="6">Julio</SelectItem>
+              <SelectItem value="7">Agosto</SelectItem>
+              <SelectItem value="8">Septiembre</SelectItem>
+              <SelectItem value="9">Octubre</SelectItem>
+              <SelectItem value="10">Noviembre</SelectItem>
+              <SelectItem value="11">Diciembre</SelectItem>
+            </SelectContent>
+          </Select>
+
+          <Select value={(selectedMonthForStats ?? new Date()).getFullYear().toString()} onValueChange={handleYearSelect}>
+            <SelectTrigger className="w-full sm:w-[120px]">
+              <SelectValue placeholder="Año" />
+            </SelectTrigger>
+            <SelectContent>
+              {Array.from({ length: 6 }).map((_, idx) => {
+                const year = new Date().getFullYear() - 3 + idx; // rango: año actual ±3
+                return (
+                  <SelectItem key={year} value={year.toString()}>{year}</SelectItem>
+                )
+              })}
+            </SelectContent>
+          </Select>
+
+          <Button variant="outline" onClick={() => setSelectedMonthForStats(undefined)} className="w-full sm:w-auto">
+            Limpiar mes
+          </Button>
+        </div>
+      </div>
+
       {/* Stats Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
         {/* Azul: Monto ventas del día */}
@@ -211,43 +317,52 @@ export default function VentasHechasPage() {
             <div>
               <CardTitle className="text-sm font-medium text-blue-600">Ventas del Día</CardTitle>
               <div className="text-2xl font-bold text-gray-900">${montoVentasDelDia.toLocaleString()}</div>
-              <p className="text-xs text-gray-500 mt-1">Monto de ventas completadas hoy</p>
+              <p className="text-xs text-gray-500 mt-1">
+                {selectedDayForStats ? `Monto de ventas del ${format(selectedDayForStats, "dd/MM/yyyy", { locale: es })}` : "Monto de ventas del día actual"}
+              </p>
             </div>
             <ShoppingCart className="h-8 w-8 text-blue-500" />
           </CardHeader>
         </Card>
 
-        {/* Verde: Monto ventas totales */}
+        {/* Verde: Monto ventas totales del mes */}
         <Card className="border-l-4 border-l-green-500">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <div>
               <CardTitle className="text-sm font-medium text-green-600">Ventas Totales</CardTitle>
               <div className="text-2xl font-bold text-gray-900">${montoVentasTotales.toLocaleString()}</div>
-              <p className="text-xs text-gray-500 mt-1">Monto total de ventas completadas</p>
+              <p className="text-xs text-gray-500 mt-1">
+                {selectedMonthForStats ? `Monto total del mes de ${format(selectedMonthForStats, "MMMM yyyy", { locale: es })}` : "Monto total de ventas del mes actual"}
+              </p>
             </div>
             <ShoppingCart className="h-8 w-8 text-green-500" />
           </CardHeader>
         </Card>
 
-        {/* Marrón: Cantidad ventas del día */}
+        {/* Marrón: Cantidad ventas del día */
+        }
         <Card className="border-l-4" style={{ borderLeftColor: '#a0522d' }}>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <div>
               <CardTitle className="text-sm font-medium" style={{ color: '#a0522d' }}>Ventas Hoy</CardTitle>
               <div className="text-2xl font-bold text-gray-900">{cantidadVentasDelDia}</div>
-              <p className="text-xs text-gray-500 mt-1">Cantidad de ventas completadas hoy</p>
+              <p className="text-xs text-gray-500 mt-1">
+                {selectedDayForStats ? `Cantidad de ventas del ${format(selectedDayForStats, "dd/MM/yyyy", { locale: es })}` : "Cantidad de ventas de hoy"}
+              </p>
             </div>
             <Badge style={{ backgroundColor: '#f4e1d2', color: '#a0522d' }}>{cantidadVentasDelDia}</Badge>
           </CardHeader>
         </Card>
 
-        {/* Morado: Cantidad ventas del mes */}
+        {/* Morado: Cantidad ventas del mes seleccionado */}
         <Card className="border-l-4 border-l-purple-500">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <div>
               <CardTitle className="text-sm font-medium text-purple-600">Ventas del Mes</CardTitle>
               <div className="text-2xl font-bold text-gray-900">{cantidadVentasDelMes}</div>
-              <p className="text-xs text-gray-500 mt-1">Cantidad de ventas completadas este mes</p>
+              <p className="text-xs text-gray-500 mt-1">
+                {selectedMonthForStats ? `Ventas completadas en ${format(selectedMonthForStats, "MMMM yyyy", { locale: es })}` : "Ventas completadas este mes"}
+              </p>
             </div>
             <CalendarIcon className="h-8 w-8 text-purple-500" />
           </CardHeader>
@@ -290,30 +405,7 @@ export default function VentasHechasPage() {
                   <SelectItem value="cancelada">Canceladas</SelectItem>
                 </SelectContent>
               </Select>
-              <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
-                <PopoverTrigger asChild>
-                  <Button
-                    variant="outline"
-                    className={cn(
-                      "w-full sm:w-[240px] justify-start text-left font-normal",
-                      !selectedDate && "text-muted-foreground",
-                    )}
-                  >
-                    <CalendarIcon className="mr-2 h-4 w-4" />
-                    {selectedDate ? format(selectedDate, "dd/MM/yyyy", { locale: es }) : "Filtrar por fecha"}
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-auto p-0" align="start">
-                  <Calendar mode="single" selected={selectedDate} onSelect={handleDateSelect} initialFocus locale={es} />
-                  {selectedDate && (
-                    <div className="p-3 border-t">
-                      <Button variant="outline" size="sm" onClick={clearDateFilter} className="w-full bg-transparent">
-                        Limpiar filtro
-                      </Button>
-                    </div>
-                  )}
-                </PopoverContent>
-              </Popover>
+              {/* Filtro de fecha inferior ocultado intencionalmente para unificar con el selector superior */}
             </div>
           </div>
         </CardHeader>
