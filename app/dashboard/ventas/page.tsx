@@ -1,0 +1,562 @@
+"use client"
+
+import { useState, useEffect } from "react"
+import { supabase } from "@/lib/supabaseClient"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Badge } from "@/components/ui/badge"
+import { Calendar } from "@/components/ui/calendar"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogClose } from "@/components/ui/dialog"
+import { Search, ShoppingCart, Eye, CalendarIcon, FileText, Loader2 } from "lucide-react"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { BreadcrumbNav } from "@/components/breadcrumb-nav"
+import { format } from "date-fns"
+import { es } from "date-fns/locale"
+import { cn } from "@/lib/utils"
+import { useAlert } from "@/components/AlertProvider"
+
+// Interfaces para los datos
+interface VentaProcesada {
+    id: string;
+    fecha: string;
+    fechaDate: Date;
+    cliente: string;
+    items: number;
+    total: number;
+    estado: "completada" | "pendiente" | "cancelada";
+    metodoPago: string;
+}
+
+interface DetalleVenta {
+    nombre_producto: string;
+    cantidad: number;
+    unidad_medida: string; // La unidad en que se vendió
+    precio_unitario: number; // El precio para la unidad en que se vendió
+    subtotal: number;
+    // Datos del producto original para referencia
+    precio_base_producto: number;
+    unidad_base_producto: string;
+}
+
+export default function VentasHechasPage() {
+  const [sales, setSales] = useState<VentaProcesada[]>([])
+  const [loading, setLoading] = useState(true)
+  const [searchTerm, setSearchTerm] = useState("")
+  const [filterEstado, setFilterEstado] = useState<string>("todos")
+  const [selectedDate, setSelectedDate] = useState<Date | undefined>(undefined)
+  const [isCalendarOpen, setIsCalendarOpen] = useState(false)
+  const { showAlert } = useAlert();
+
+  // Filtros para tarjetas de estadísticas
+  const [selectedDayForStats, setSelectedDayForStats] = useState<Date | undefined>(new Date())
+  const [selectedMonthForStats, setSelectedMonthForStats] = useState<Date | undefined>(new Date())
+  const [isDayPickerOpen, setIsDayPickerOpen] = useState(false)
+  const [isMonthPickerOpen, setIsMonthPickerOpen] = useState(false)
+
+  // Helpers para cambio de mes/año
+  const handleMonthSelect = (monthStr: string) => {
+    const month = parseInt(monthStr, 10);
+    const base = selectedMonthForStats ?? new Date();
+    const updated = new Date(base.getFullYear(), month, 1, 0, 0, 0);
+    setSelectedMonthForStats(updated);
+  }
+  const handleYearSelect = (yearStr: string) => {
+    const year = parseInt(yearStr, 10);
+    const base = selectedMonthForStats ?? new Date();
+    const updated = new Date(year, base.getMonth(), 1, 0, 0, 0);
+    setSelectedMonthForStats(updated);
+  }
+
+  // Estados para el modal de detalles
+  const [selectedVenta, setSelectedVenta] = useState<VentaProcesada | null>(null)
+  const [detallesVenta, setDetallesVenta] = useState<DetalleVenta[]>([])
+  const [loadingDetails, setLoadingDetails] = useState(false)
+  const [isDetailModalOpen, setIsDetailModalOpen] = useState(false)
+
+  // Mantener sincronizados el día del header y el filtro de la tabla
+  useEffect(() => {
+    // Si hay día seleccionado para stats, reflejarlo en el filtro inferior
+    if (selectedDayForStats) {
+      setSelectedDate(selectedDayForStats);
+    }
+  }, [selectedDayForStats]);
+
+  const handleSelectDayForStats = (d?: Date) => {
+    setSelectedDayForStats(d ?? undefined);
+    setSelectedDate(d ?? undefined); // unifica con filtro de tabla
+    setIsDayPickerOpen(false);
+  }
+
+  useEffect(() => {
+    const fetchVentas = async () => {
+      setLoading(true);
+      const { data, error } = await supabase
+        .from('ventas')
+        .select(`
+          id,
+          created_at,
+          monto_total,
+          estado,
+          metodo_pago,
+          clientes ( nombre, apellido ),
+          detalles_ventas ( id )
+        `)
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        showAlert('Error al cargar las ventas', 'error');
+        console.error(error);
+      } else {
+        const ventasProcesadas: VentaProcesada[] = data.map((venta: any) => ({
+            id: venta.id,
+            fecha: format(new Date(venta.created_at), "dd/MM/yyyy HH:mm", { locale: es }),
+            fechaDate: new Date(venta.created_at),
+            cliente: venta.clientes ? `${venta.clientes.nombre} ${venta.clientes.apellido}` : "Cliente no disponible",
+            items: venta.detalles_ventas.length,
+            total: venta.monto_total,
+            estado: venta.estado,
+            metodoPago: venta.metodo_pago.replace('_', ' ').replace(/\b\w/g, (l: string) => l.toUpperCase()),
+        }));
+        setSales(ventasProcesadas);
+      }
+      setLoading(false);
+    };
+
+    fetchVentas();
+  }, [showAlert]);
+
+  // Efecto para cargar los detalles cuando se selecciona una venta
+  useEffect(() => {
+    const fetchDetallesVenta = async () => {
+        if (!selectedVenta) return;
+
+        setLoadingDetails(true);
+        const { data, error } = await supabase
+            .from('detalles_ventas')
+            .select(`
+                cantidad,
+                unidad_medida,
+                precio_unitario,
+                subtotal,
+                productos ( nombre, precio, unidad_medida )
+            `)
+            .eq('id_venta', selectedVenta.id);
+
+        if (error) {
+            showAlert('Error al cargar los detalles de la venta', 'error');
+            console.error(error);
+            setDetallesVenta([]);
+        } else {
+            const detallesProcesados: DetalleVenta[] = data.map((detalle: any) => ({
+                nombre_producto: detalle.productos.nombre,
+                cantidad: detalle.cantidad,
+                unidad_medida: detalle.unidad_medida,
+                precio_unitario: detalle.precio_unitario,
+                subtotal: detalle.subtotal,
+                precio_base_producto: detalle.productos.precio,
+                unidad_base_producto: detalle.productos.unidad_medida,
+            }));
+            setDetallesVenta(detallesProcesados);
+        }
+        setLoadingDetails(false);
+    };
+
+    if (isDetailModalOpen) {
+        fetchDetallesVenta();
+    }
+  }, [selectedVenta, isDetailModalOpen, showAlert]);
+
+  const handleViewDetails = (venta: VentaProcesada) => {
+    setSelectedVenta(venta);
+    setIsDetailModalOpen(true);
+  };
+
+  const filteredSales = sales.filter((sale) => {
+    const matchesSearch =
+      sale.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      sale.cliente.toLowerCase().includes(searchTerm.toLowerCase())
+
+    const matchesFilter = filterEstado === "todos" || sale.estado === filterEstado
+
+    const matchesDate =
+      !selectedDate ||
+      (sale.fechaDate.getDate() === selectedDate.getDate() &&
+        sale.fechaDate.getMonth() === selectedDate.getMonth() &&
+        sale.fechaDate.getFullYear() === selectedDate.getFullYear())
+
+    return matchesSearch && matchesFilter && matchesDate
+  })
+
+  // Utilidades de fecha
+  const now = new Date();
+  const esMismoDia = (date: Date, ref: Date) =>
+    date.getDate() === ref.getDate() &&
+    date.getMonth() === ref.getMonth() &&
+    date.getFullYear() === ref.getFullYear();
+  const esMismoMes = (date: Date, ref: Date) =>
+    date.getMonth() === ref.getMonth() &&
+    date.getFullYear() === ref.getFullYear();
+
+  // Ventas del día (solo completadas) según día seleccionado
+  const refDia = selectedDayForStats ?? now;
+  const ventasDelDia = sales.filter(sale => sale.estado === "completada" && esMismoDia(sale.fechaDate, refDia));
+  const montoVentasDelDia = ventasDelDia.reduce((sum, sale) => sum + sale.total, 0);
+  const cantidadVentasDelDia = ventasDelDia.length;
+
+  // Ventas del mes (solo completadas) según mes seleccionado
+  const refMes = selectedMonthForStats ?? now;
+  const ventasDelMes = sales.filter(sale => sale.estado === "completada" && esMismoMes(sale.fechaDate, refMes));
+  const cantidadVentasDelMes = ventasDelMes.length;
+
+  // Ventas totales (monto) del mes seleccionado
+  const montoVentasTotales = ventasDelMes.reduce((sum, sale) => sum + sale.total, 0);
+
+  const handleDateSelect = (date: Date | undefined) => {
+    setSelectedDate(date)
+    setSelectedDayForStats(date)
+    setIsCalendarOpen(false)
+  }
+
+  const clearDateFilter = () => {
+    setSelectedDate(undefined)
+    setSelectedDayForStats(undefined)
+  }
+
+  return (
+    <div className="p-4 sm:p-6 space-y-4 sm:space-y-6">
+      <BreadcrumbNav
+        items={[
+          { label: "Fiambrería San Agustín", href: "/dashboard" },
+          { label: "Dashboard", href: "/dashboard" },
+          { label: "Ventas Hechas" },
+        ]}
+      />
+
+      <div>
+        <h1 className="text-3xl font-bold text-gray-900">Ventas Hechas</h1>
+        <p className="text-gray-600">Historial completo de todas las ventas realizadas</p>
+      </div>
+
+      {/* Filtros para tarjetas */}
+      <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
+        <Popover open={isDayPickerOpen} onOpenChange={setIsDayPickerOpen}>
+          <PopoverTrigger asChild>
+            <Button variant="outline" className="w-full sm:w-auto">
+              <CalendarIcon className="mr-2 h-4 w-4" />
+              {selectedDayForStats ? `Día: ${format(selectedDayForStats, "dd/MM/yyyy", { locale: es })}` : "Seleccionar día"}
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent className="w-auto p-0" align="start">
+            <Calendar
+              mode="single"
+              selected={selectedDayForStats}
+              onSelect={handleSelectDayForStats}
+              initialFocus
+              locale={es}
+            />
+            {selectedDayForStats && (
+              <div className="p-3 border-t">
+                <Button variant="outline" size="sm" onClick={() => handleSelectDayForStats(undefined)} className="w-full bg-transparent">
+                  Limpiar día
+                </Button>
+              </div>
+            )}
+          </PopoverContent>
+        </Popover>
+
+        {/* Selector de Mes y Año (solo meses) */}
+        <div className="flex flex-col sm:flex-row gap-2">
+          <Select value={(selectedMonthForStats ?? new Date()).getMonth().toString()} onValueChange={handleMonthSelect}>
+            <SelectTrigger className="w-full sm:w-[160px]">
+              <SelectValue placeholder="Mes" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="0">Enero</SelectItem>
+              <SelectItem value="1">Febrero</SelectItem>
+              <SelectItem value="2">Marzo</SelectItem>
+              <SelectItem value="3">Abril</SelectItem>
+              <SelectItem value="4">Mayo</SelectItem>
+              <SelectItem value="5">Junio</SelectItem>
+              <SelectItem value="6">Julio</SelectItem>
+              <SelectItem value="7">Agosto</SelectItem>
+              <SelectItem value="8">Septiembre</SelectItem>
+              <SelectItem value="9">Octubre</SelectItem>
+              <SelectItem value="10">Noviembre</SelectItem>
+              <SelectItem value="11">Diciembre</SelectItem>
+            </SelectContent>
+          </Select>
+
+          <Select value={(selectedMonthForStats ?? new Date()).getFullYear().toString()} onValueChange={handleYearSelect}>
+            <SelectTrigger className="w-full sm:w-[120px]">
+              <SelectValue placeholder="Año" />
+            </SelectTrigger>
+            <SelectContent>
+              {Array.from({ length: 6 }).map((_, idx) => {
+                const year = new Date().getFullYear() - 3 + idx; // rango: año actual ±3
+                return (
+                  <SelectItem key={year} value={year.toString()}>{year}</SelectItem>
+                )
+              })}
+            </SelectContent>
+          </Select>
+
+          <Button variant="outline" onClick={() => setSelectedMonthForStats(undefined)} className="w-full sm:w-auto">
+            Limpiar mes
+          </Button>
+        </div>
+      </div>
+
+      {/* Stats Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
+        {/* Azul: Monto ventas del día */}
+        <Card className="border-l-4 border-l-blue-500">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <div>
+              <CardTitle className="text-sm font-medium text-blue-600">Ventas del Día</CardTitle>
+              <div className="text-2xl font-bold text-gray-900">${montoVentasDelDia.toLocaleString()}</div>
+              <p className="text-xs text-gray-500 mt-1">
+                {selectedDayForStats ? `Monto de ventas del ${format(selectedDayForStats, "dd/MM/yyyy", { locale: es })}` : "Monto de ventas del día actual"}
+              </p>
+            </div>
+            <ShoppingCart className="h-8 w-8 text-blue-500" />
+          </CardHeader>
+        </Card>
+
+        {/* Verde: Monto ventas totales del mes */}
+        <Card className="border-l-4 border-l-green-500">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <div>
+              <CardTitle className="text-sm font-medium text-green-600">Ventas Totales</CardTitle>
+              <div className="text-2xl font-bold text-gray-900">${montoVentasTotales.toLocaleString()}</div>
+              <p className="text-xs text-gray-500 mt-1">
+                {selectedMonthForStats ? `Monto total del mes de ${format(selectedMonthForStats, "MMMM yyyy", { locale: es })}` : "Monto total de ventas del mes actual"}
+              </p>
+            </div>
+            <ShoppingCart className="h-8 w-8 text-green-500" />
+          </CardHeader>
+        </Card>
+
+        {/* Marrón: Cantidad ventas del día */
+        }
+        <Card className="border-l-4" style={{ borderLeftColor: '#a0522d' }}>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <div>
+              <CardTitle className="text-sm font-medium" style={{ color: '#a0522d' }}>Ventas Hoy</CardTitle>
+              <div className="text-2xl font-bold text-gray-900">{cantidadVentasDelDia}</div>
+              <p className="text-xs text-gray-500 mt-1">
+                {selectedDayForStats ? `Cantidad de ventas del ${format(selectedDayForStats, "dd/MM/yyyy", { locale: es })}` : "Cantidad de ventas de hoy"}
+              </p>
+            </div>
+            <Badge style={{ backgroundColor: '#f4e1d2', color: '#a0522d' }}>{cantidadVentasDelDia}</Badge>
+          </CardHeader>
+        </Card>
+
+        {/* Morado: Cantidad ventas del mes seleccionado */}
+        <Card className="border-l-4 border-l-purple-500">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <div>
+              <CardTitle className="text-sm font-medium text-purple-600">Ventas del Mes</CardTitle>
+              <div className="text-2xl font-bold text-gray-900">{cantidadVentasDelMes}</div>
+              <p className="text-xs text-gray-500 mt-1">
+                {selectedMonthForStats ? `Ventas completadas en ${format(selectedMonthForStats, "MMMM yyyy", { locale: es })}` : "Ventas completadas este mes"}
+              </p>
+            </div>
+            <CalendarIcon className="h-8 w-8 text-purple-500" />
+          </CardHeader>
+        </Card>
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <FileText className="h-5 w-5" />
+            Historial de Ventas
+          </CardTitle>
+          <CardDescription>
+            Lista de todas las ventas realizadas
+            {selectedDate && (
+              <span className="ml-2 text-blue-600">
+                - Filtrado por: {format(selectedDate, "dd/MM/yyyy", { locale: es })}
+              </span>
+            )}
+          </CardDescription>
+          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
+            <div className="flex items-center space-x-2 w-full sm:w-auto">
+              <Search className="h-4 w-4 text-gray-400" />
+              <Input
+                placeholder="Buscar por ID o cliente..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-full sm:max-w-sm"
+              />
+            </div>
+            <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+              <Select value={filterEstado} onValueChange={setFilterEstado}>
+                <SelectTrigger className="w-full sm:w-[180px]">
+                  <SelectValue placeholder="Filtrar por estado" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="todos">Todos los estados</SelectItem>
+                  <SelectItem value="completada">Completadas</SelectItem>
+                  <SelectItem value="pendiente">Pendientes</SelectItem>
+                  <SelectItem value="cancelada">Canceladas</SelectItem>
+                </SelectContent>
+              </Select>
+              {/* Filtro de fecha inferior ocultado intencionalmente para unificar con el selector superior */}
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="min-w-[100px]">ID Venta</TableHead>
+                  <TableHead className="min-w-[120px]">Fecha</TableHead>
+                  <TableHead className="min-w-[120px]">Cliente</TableHead>
+                  <TableHead className="hidden sm:table-cell">Items</TableHead>
+                  <TableHead className="min-w-[100px]">Total</TableHead>
+                  <TableHead className="hidden md:table-cell">Método Pago</TableHead>
+                  <TableHead className="min-w-[80px]">Estado</TableHead>
+                  <TableHead className="min-w-[80px]">Acciones</TableHead>
+                </TableRow>
+              </TableHeader>
+            <TableBody>
+              {loading ? (
+                <TableRow>
+                  <TableCell colSpan={8} className="text-center py-8 text-gray-500">
+                    Cargando ventas...
+                  </TableCell>
+                </TableRow>
+              ) : filteredSales.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={8} className="text-center py-8 text-gray-500">
+                    {selectedDate
+                      ? `No hay ventas para la fecha ${format(selectedDate, "dd/MM/yyyy", { locale: es })}`
+                      : "No se encontraron ventas con los filtros aplicados"}
+                  </TableCell>
+                </TableRow>
+              ) : (
+                filteredSales.map((sale) => (
+                  <TableRow key={sale.id}>
+                    <TableCell className="font-mono font-medium text-xs sm:text-sm">{sale.id.substring(0, 8)}...</TableCell>
+                    <TableCell className="text-xs sm:text-sm">{sale.fecha}</TableCell>
+                    <TableCell className="truncate max-w-[120px]">{sale.cliente}</TableCell>
+                    <TableCell className="hidden sm:table-cell">{sale.items} items</TableCell>
+                    <TableCell className="font-semibold">${sale.total.toLocaleString()}</TableCell>
+                    <TableCell className="hidden md:table-cell">{sale.metodoPago}</TableCell>
+                    <TableCell>
+                      <Badge
+                        variant={
+                          sale.estado === "completada"
+                            ? "default"
+                            : sale.estado === "pendiente"
+                              ? "secondary"
+                              : "destructive"
+                        }
+                        className={
+                          sale.estado === "completada"
+                            ? "bg-green-500 text-white"
+                            : sale.estado === "pendiente"
+                              ? "bg-yellow-500 text-white"
+                              : "bg-red-500 text-white"
+                        }
+                      >
+                        <span className="hidden sm:inline">{sale.estado}</span>
+                        <span className="sm:hidden">{sale.estado.charAt(0).toUpperCase()}</span>
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <Button variant="outline" size="sm" onClick={() => handleViewDetails(sale)} className="w-full sm:w-auto">
+                        <Eye className="h-4 w-4" />
+                        <span className="hidden sm:inline ml-1">Ver</span>
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Modal de Detalles de Venta */}
+      <Dialog open={isDetailModalOpen} onOpenChange={setIsDetailModalOpen}>
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="text-lg sm:text-xl">Detalles de la Venta</DialogTitle>
+            <DialogDescription className="text-sm">
+              Información completa de la venta y los productos incluidos.
+            </DialogDescription>
+          </DialogHeader>
+          {loadingDetails ? (
+            <div className="flex justify-center items-center h-40">
+              <Loader2 className="h-8 w-8 animate-spin text-gray-500" />
+            </div>
+          ) : selectedVenta && (
+            <div className="grid gap-4 py-4">
+                <div className="grid grid-cols-1 sm:grid-cols-4 items-start sm:items-center gap-2 sm:gap-4 text-sm">
+                    <div className="font-semibold">ID Venta:</div>
+                    <div className="sm:col-span-3 font-mono text-xs sm:text-sm break-all">{selectedVenta.id}</div>
+                    
+                    <div className="font-semibold">Cliente:</div>
+                    <div className="sm:col-span-3 break-words">{selectedVenta.cliente}</div>
+
+                    <div className="font-semibold">Fecha:</div>
+                    <div className="sm:col-span-3">{selectedVenta.fecha}</div>
+
+                    <div className="font-semibold">Método de Pago:</div>
+                    <div className="sm:col-span-3">{selectedVenta.metodoPago}</div>
+                </div>
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="min-w-[120px]">Producto</TableHead>
+                      <TableHead className="text-right min-w-[80px]">Cantidad</TableHead>
+                      <TableHead className="hidden sm:table-cell">Unidad</TableHead>
+                      <TableHead className="text-right min-w-[100px]">Precio Unit.</TableHead>
+                      <TableHead className="text-right min-w-[100px]">Subtotal</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {detallesVenta.map((item, index) => (
+                      <TableRow key={index}>
+                        <TableCell className="truncate max-w-[120px]">{item.nombre_producto}</TableCell>
+                        <TableCell className="text-right">{item.cantidad}</TableCell>
+                        <TableCell className="hidden sm:table-cell">{item.unidad_medida}</TableCell>
+                        <TableCell className="text-right text-xs sm:text-sm">
+                          {
+                            item.unidad_medida === 'gramos' 
+                            ? `$${item.precio_base_producto.toLocaleString()} (kg)`
+                            : `$${item.precio_unitario.toLocaleString()}`
+                          }
+                        </TableCell>
+                        <TableCell className="text-right font-semibold">${item.subtotal.toLocaleString()}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+              <div className="flex justify-end items-center pt-4 border-t mt-4">
+                  <div className="text-xl font-bold">Total: ${selectedVenta.total.toLocaleString()}</div>
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button type="button" variant="secondary">
+                Cerrar
+              </Button>
+            </DialogClose>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+    </div>
+  )
+}
