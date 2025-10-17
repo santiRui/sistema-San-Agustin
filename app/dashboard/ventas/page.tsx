@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react"
 import { supabase } from "@/lib/supabaseClient"
+import { useSession } from "@/components/SessionProvider"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -10,7 +11,8 @@ import { Badge } from "@/components/ui/badge"
 import { Calendar } from "@/components/ui/calendar"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogClose } from "@/components/ui/dialog"
-import { Search, ShoppingCart, Eye, CalendarIcon, FileText, Loader2 } from "lucide-react"
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog"
+import { Search, ShoppingCart, Eye, CalendarIcon, FileText, Loader2, Trash2 } from "lucide-react"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { BreadcrumbNav } from "@/components/breadcrumb-nav"
 import { format } from "date-fns"
@@ -44,9 +46,14 @@ interface DetalleVenta {
 export default function VentasHechasPage() {
   const [sales, setSales] = useState<VentaProcesada[]>([])
   const [loading, setLoading] = useState(true)
+  const { role } = useSession();
+  const canDelete = role !== "empleado"; // administrador y encargado pueden eliminar
+
   const [searchTerm, setSearchTerm] = useState("")
   const [filterEstado, setFilterEstado] = useState<string>("todos")
   const [selectedDate, setSelectedDate] = useState<Date | undefined>(undefined)
+  const [selectedMonth, setSelectedMonth] = useState<number | undefined>(undefined)
+  const [selectedYear, setSelectedYear] = useState<number | undefined>(undefined)
   const [isCalendarOpen, setIsCalendarOpen] = useState(false)
   const { showAlert } = useAlert();
 
@@ -140,6 +147,25 @@ export default function VentasHechasPage() {
     setIsDetailModalOpen(true);
   };
 
+  const handleDeleteVenta = async (id: string) => {
+    try {
+      // Primero borrar detalles vinculados a la venta
+      const { error: detErr } = await supabase.from('detalles_ventas').delete().eq('id_venta', id);
+      if (detErr) throw detErr;
+
+      // Luego borrar la venta
+      const { error: ventaErr } = await supabase.from('ventas').delete().eq('id', id);
+      if (ventaErr) throw ventaErr;
+
+      // Actualizar estado local
+      setSales((prev) => prev.filter((v) => v.id !== id));
+      showAlert('Venta eliminada con éxito.', 'success');
+    } catch (e: any) {
+      console.error(e);
+      showAlert('Error al eliminar la venta: ' + (e?.message || 'desconocido'), 'error');
+    }
+  };
+
   const filteredSales = sales.filter((sale) => {
     const matchesSearch =
       sale.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -156,28 +182,33 @@ export default function VentasHechasPage() {
     return matchesSearch && matchesFilter && matchesDate
   })
 
-  // Obtener la fecha actual
+  // Fechas de referencia
   const now = new Date();
-  const esMismoDia = (date: Date) =>
-    date.getDate() === now.getDate() &&
-    date.getMonth() === now.getMonth() &&
-    date.getFullYear() === now.getFullYear();
-  const esMismoMes = (date: Date) =>
-    date.getMonth() === now.getMonth() &&
-    date.getFullYear() === now.getFullYear();
+  const refDay = selectedDate ?? now;
+  const monthRef = selectedMonth ?? now.getMonth();
+  const yearRef = selectedYear ?? now.getFullYear();
 
-  // Ventas del día (solo completadas)
-  const ventasDelDia = sales.filter(sale => sale.estado === "completada" && esMismoDia(sale.fechaDate));
+  const esMismoDiaRef = (date: Date, ref: Date) =>
+    date.getDate() === ref.getDate() &&
+    date.getMonth() === ref.getMonth() &&
+    date.getFullYear() === ref.getFullYear();
+
+  const esMismoMesAnio = (date: Date, month: number, year: number) =>
+    date.getMonth() === month && date.getFullYear() === year;
+
+  // Ventas del día (solo completadas) respecto al día seleccionado u hoy
+  const ventasDelDia = sales.filter(
+    (sale) => sale.estado === "completada" && esMismoDiaRef(sale.fechaDate, refDay)
+  );
   const montoVentasDelDia = ventasDelDia.reduce((sum, sale) => sum + sale.total, 0);
   const cantidadVentasDelDia = ventasDelDia.length;
 
-  // Ventas del mes (solo completadas)
-  const ventasDelMes = sales.filter(sale => sale.estado === "completada" && esMismoMes(sale.fechaDate));
-  const cantidadVentasDelMes = ventasDelMes.length;
-
-  // Ventas totales (todas completadas)
-  const ventasTotales = sales.filter(sale => sale.estado === "completada");
-  const montoVentasTotales = ventasTotales.reduce((sum, sale) => sum + sale.total, 0);
+  // Ventas del mes seleccionado (solo completadas)
+  const ventasMesSeleccionado = sales.filter(
+    (sale) => sale.estado === "completada" && esMismoMesAnio(sale.fechaDate, monthRef, yearRef)
+  );
+  const cantidadVentasDelMes = ventasMesSeleccionado.length;
+  const montoVentasTotales = ventasMesSeleccionado.reduce((sum, sale) => sum + sale.total, 0);
 
   const handleDateSelect = (date: Date | undefined) => {
     setSelectedDate(date)
@@ -203,6 +234,65 @@ export default function VentasHechasPage() {
         <p className="text-gray-600">Historial completo de todas las ventas realizadas</p>
       </div>
 
+      {/* Barra de filtros superior: Día + Mes + Año + Limpiar mes */}
+      <div className="flex flex-col sm:flex-row flex-wrap gap-2 items-start sm:items-center">
+        <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
+          <PopoverTrigger asChild>
+            <Button
+              variant="outline"
+              className={cn(
+                "w-full sm:w-auto min-w-[200px] justify-start text-left font-normal",
+                !selectedDate && "text-muted-foreground",
+              )}
+            >
+              <CalendarIcon className="mr-2 h-4 w-4" />
+              {selectedDate ? `Día: ${format(selectedDate, "dd/MM/yyyy", { locale: es })}` : `Día: ${format(now, "dd/MM/yyyy", { locale: es })}`}
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent className="w-auto p-0" align="start">
+            <Calendar mode="single" selected={selectedDate} onSelect={handleDateSelect} initialFocus locale={es} />
+          </PopoverContent>
+        </Popover>
+
+        <Select value={String((selectedMonth ?? now.getMonth()))} onValueChange={(v) => setSelectedMonth(parseInt(v))}>
+          <SelectTrigger className="w-full sm:w-auto min-w-[150px]">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="0">Enero</SelectItem>
+            <SelectItem value="1">Febrero</SelectItem>
+            <SelectItem value="2">Marzo</SelectItem>
+            <SelectItem value="3">Abril</SelectItem>
+            <SelectItem value="4">Mayo</SelectItem>
+            <SelectItem value="5">Junio</SelectItem>
+            <SelectItem value="6">Julio</SelectItem>
+            <SelectItem value="7">Agosto</SelectItem>
+            <SelectItem value="8">Septiembre</SelectItem>
+            <SelectItem value="9">Octubre</SelectItem>
+            <SelectItem value="10">Noviembre</SelectItem>
+            <SelectItem value="11">Diciembre</SelectItem>
+          </SelectContent>
+        </Select>
+
+        <Select value={String((selectedYear ?? now.getFullYear()))} onValueChange={(v) => setSelectedYear(parseInt(v))}>
+          <SelectTrigger className="w-full sm:w-auto min-w-[120px]">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {Array.from({ length: 6 }).map((_, i) => {
+              const y = now.getFullYear() - 2 + i;
+              return (
+                <SelectItem key={y} value={String(y)}>{y}</SelectItem>
+              );
+            })}
+          </SelectContent>
+        </Select>
+
+        <Button variant="outline" className="w-full sm:w-auto" onClick={() => { setSelectedMonth(undefined); setSelectedYear(undefined); }}>
+          Limpiar mes
+        </Button>
+      </div>
+
       {/* Stats Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
         {/* Azul: Monto ventas del día */}
@@ -211,19 +301,19 @@ export default function VentasHechasPage() {
             <div>
               <CardTitle className="text-sm font-medium text-blue-600">Ventas del Día</CardTitle>
               <div className="text-2xl font-bold text-gray-900">${montoVentasDelDia.toLocaleString()}</div>
-              <p className="text-xs text-gray-500 mt-1">Monto de ventas completadas hoy</p>
+              <p className="text-xs text-gray-500 mt-1">Monto de ventas completadas {selectedDate ? format(selectedDate, "dd/MM/yyyy", { locale: es }) : "hoy"}</p>
             </div>
             <ShoppingCart className="h-8 w-8 text-blue-500" />
           </CardHeader>
         </Card>
 
-        {/* Verde: Monto ventas totales */}
+        {/* Verde: Monto ventas totales del mes seleccionado */}
         <Card className="border-l-4 border-l-green-500">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <div>
               <CardTitle className="text-sm font-medium text-green-600">Ventas Totales</CardTitle>
               <div className="text-2xl font-bold text-gray-900">${montoVentasTotales.toLocaleString()}</div>
-              <p className="text-xs text-gray-500 mt-1">Monto total de ventas completadas</p>
+              <p className="text-xs text-gray-500 mt-1">Monto total del mes de {format(new Date(yearRef, monthRef, 1), "MMMM yyyy", { locale: es })}</p>
             </div>
             <ShoppingCart className="h-8 w-8 text-green-500" />
           </CardHeader>
@@ -235,19 +325,19 @@ export default function VentasHechasPage() {
             <div>
               <CardTitle className="text-sm font-medium" style={{ color: '#a0522d' }}>Ventas Hoy</CardTitle>
               <div className="text-2xl font-bold text-gray-900">{cantidadVentasDelDia}</div>
-              <p className="text-xs text-gray-500 mt-1">Cantidad de ventas completadas hoy</p>
+              <p className="text-xs text-gray-500 mt-1">Cantidad de ventas completadas {selectedDate ? format(selectedDate, "dd/MM/yyyy", { locale: es }) : "hoy"}</p>
             </div>
             <Badge style={{ backgroundColor: '#f4e1d2', color: '#a0522d' }}>{cantidadVentasDelDia}</Badge>
           </CardHeader>
         </Card>
 
-        {/* Morado: Cantidad ventas del mes */}
+        {/* Morado: Cantidad ventas del mes seleccionado */}
         <Card className="border-l-4 border-l-purple-500">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <div>
               <CardTitle className="text-sm font-medium text-purple-600">Ventas del Mes</CardTitle>
               <div className="text-2xl font-bold text-gray-900">{cantidadVentasDelMes}</div>
-              <p className="text-xs text-gray-500 mt-1">Cantidad de ventas completadas este mes</p>
+              <p className="text-xs text-gray-500 mt-1">Ventas completadas en {format(new Date(yearRef, monthRef, 1), "MMMM yyyy", { locale: es })}</p>
             </div>
             <CalendarIcon className="h-8 w-8 text-purple-500" />
           </CardHeader>
@@ -290,30 +380,6 @@ export default function VentasHechasPage() {
                   <SelectItem value="cancelada">Canceladas</SelectItem>
                 </SelectContent>
               </Select>
-              <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
-                <PopoverTrigger asChild>
-                  <Button
-                    variant="outline"
-                    className={cn(
-                      "w-full sm:w-[240px] justify-start text-left font-normal",
-                      !selectedDate && "text-muted-foreground",
-                    )}
-                  >
-                    <CalendarIcon className="mr-2 h-4 w-4" />
-                    {selectedDate ? format(selectedDate, "dd/MM/yyyy", { locale: es }) : "Filtrar por fecha"}
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-auto p-0" align="start">
-                  <Calendar mode="single" selected={selectedDate} onSelect={handleDateSelect} initialFocus locale={es} />
-                  {selectedDate && (
-                    <div className="p-3 border-t">
-                      <Button variant="outline" size="sm" onClick={clearDateFilter} className="w-full bg-transparent">
-                        Limpiar filtro
-                      </Button>
-                    </div>
-                  )}
-                </PopoverContent>
-              </Popover>
             </div>
           </div>
         </CardHeader>
@@ -329,7 +395,7 @@ export default function VentasHechasPage() {
                   <TableHead className="min-w-[100px]">Total</TableHead>
                   <TableHead className="hidden md:table-cell">Método Pago</TableHead>
                   <TableHead className="min-w-[80px]">Estado</TableHead>
-                  <TableHead className="min-w-[80px]">Acciones</TableHead>
+                  <TableHead className="min-w-[120px]">Acciones</TableHead>
                 </TableRow>
               </TableHeader>
             <TableBody>
@@ -378,10 +444,36 @@ export default function VentasHechasPage() {
                       </Badge>
                     </TableCell>
                     <TableCell>
-                      <Button variant="outline" size="sm" onClick={() => handleViewDetails(sale)} className="w-full sm:w-auto">
-                        <Eye className="h-4 w-4" />
-                        <span className="hidden sm:inline ml-1">Ver</span>
-                      </Button>
+                      <div className="flex gap-2">
+                        <Button variant="outline" size="sm" onClick={() => handleViewDetails(sale)} className="w-full sm:w-auto">
+                          <Eye className="h-4 w-4" />
+                          <span className="hidden sm:inline ml-1">Ver</span>
+                        </Button>
+                        {canDelete && (
+                          <AlertDialog>
+                            <AlertDialogTrigger asChild>
+                              <Button variant="outline" size="sm" className="w-full sm:w-auto text-red-600 border-red-200 hover:bg-red-50">
+                                <Trash2 className="h-4 w-4" />
+                                <span className="hidden sm:inline ml-1">Eliminar</span>
+                              </Button>
+                            </AlertDialogTrigger>
+                            <AlertDialogContent>
+                              <AlertDialogHeader>
+                                <AlertDialogTitle>Eliminar venta</AlertDialogTitle>
+                                <AlertDialogDescription>
+                                  Esta acción eliminará permanentemente la venta seleccionada y sus detalles asociados. No se puede deshacer.
+                                </AlertDialogDescription>
+                              </AlertDialogHeader>
+                              <AlertDialogFooter>
+                                <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                                <AlertDialogAction onClick={() => handleDeleteVenta(sale.id)} className="bg-red-600 hover:bg-red-700">
+                                  Eliminar
+                                </AlertDialogAction>
+                              </AlertDialogFooter>
+                            </AlertDialogContent>
+                          </AlertDialog>
+                        )}
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))

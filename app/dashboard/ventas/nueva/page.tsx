@@ -149,20 +149,39 @@ export default function RealizarVentaPage() {
   // Evitar solapamiento de fetch y aplicar solo resultados más recientes
   const isFetchingRef = useRef<boolean>(false);
   const lastFechaRef = useRef<number>(0);
-  const lastIdRef = useRef<string | null>(null);
+  const lastIdRef = useRef<number | null>(null);
   const isLightFetchingRef = useRef<boolean>(false);
   // Comparador de "más reciente" por (timestamp, id)
-  const isNewer = (ts: number, idStr: string) => {
+  const isNewer = (ts: number, idNum: number) => {
     if (ts > lastFechaRef.current) return true;
     if (ts < lastFechaRef.current) return false;
     // mismo timestamp: desempatar por id (string compare estable)
-    if (!lastIdRef.current) return true;
-    return idStr > lastIdRef.current;
+    if (lastIdRef.current === null || lastIdRef.current === undefined) return true;
+    return idNum > lastIdRef.current;
   };
   const detectarEstructuraLecturas = async () => {
-    // Hardcodeado según esquema provisto: lecturas_balanza(fecha_lectura)
-    if (!lecturasTablaRef.current) lecturasTablaRef.current = 'lecturas_balanza';
-    if (!lecturasFechaColRef.current) lecturasFechaColRef.current = 'fecha_lectura';
+    // Detecta automáticamente la tabla y la columna de fecha como en la vista de balanza
+    if (lecturasTablaRef.current && lecturasFechaColRef.current) {
+      return { tabla: lecturasTablaRef.current, fecha: lecturasFechaColRef.current } as { tabla: string, fecha: string };
+    }
+    const posiblesTablas = ['lecturas_balanza','lectura_balanza','lecturas_de_balanza','lectura_de_balanza'];
+    for (const t of posiblesTablas) {
+      const { error: testError } = await supabase.from(t as any).select('id' as any).limit(1);
+      if (!testError) {
+        const candidatosFecha = ['fecha_lectura','fecha','created_at'];
+        let fechaElegida = 'fecha_lectura';
+        for (const c of candidatosFecha) {
+          const { error: eFecha } = await supabase.from(t as any).select(`id, ${c}` as any).limit(1);
+          if (!eFecha) { fechaElegida = c; break; }
+        }
+        lecturasTablaRef.current = t;
+        lecturasFechaColRef.current = fechaElegida;
+        return { tabla: t, fecha: fechaElegida } as { tabla: string, fecha: string };
+      }
+    }
+    // Fallback
+    lecturasTablaRef.current = 'lecturas_balanza';
+    lecturasFechaColRef.current = 'fecha_lectura';
     return { tabla: 'lecturas_balanza', fecha: 'fecha_lectura' } as { tabla: string, fecha: string };
   }
 
@@ -238,25 +257,26 @@ export default function RealizarVentaPage() {
         });
       }
 
-      // Aplicar solo si la respuesta es más reciente que la última aplicada
+      // Aplicar solo si la respuesta trae un top más reciente por (timestamp, id)
       const top = lecturasConProductos[0];
       const topTime = top ? new Date(top.fecha_lectura).getTime() : 0;
-      if (topTime >= lastFechaRef.current) {
+      const topIdNum = top ? Number(top.id) : Number.NEGATIVE_INFINITY;
+      const newer = !!top && isNewer(topTime, topIdNum);
+      if (newer) {
         lastFechaRef.current = topTime;
+        lastIdRef.current = topIdNum;
         // Guardar última lectura absoluta para feedback (aunque no esté disponible)
-        if (lecturasConProductos.length > 0) {
-          const u = lecturasConProductos[0];
-          setLastAnyLectura({ id: u.id, peso: u.peso, fecha_lectura: u.fecha_lectura, fecha: u.fecha });
-        }
-        // Guardar únicamente la ÚLTIMA lectura disponible sin producto asignado
-        // Tratar NULL como disponible (solo excluir true o id_venta no nulo)
+        const u = top;
+        setLastAnyLectura({ id: u.id, peso: u.peso, fecha_lectura: u.fecha_lectura, fecha: u.fecha });
+        // Aplicar listas solo cuando el resultado es más nuevo para no pisar con datos viejos
         const soloDisponibles = lecturasConProductos.filter(l => !l.producto_id && !(l.usado === true || (l.id_venta !== null && l.id_venta !== undefined)));
         setLecturasBalanza(soloDisponibles.slice(0, 1));
-        // Guardar lecturas con producto para panel lateral (limitar)
         const conProducto = lecturasConProductos.filter(l => !!l.producto_id).slice(0, 50);
         setLecturasConProductoLista(conProducto);
-        // Guardar todas para stats/historial
         setLecturasTodas(lecturasConProductos);
+      } else {
+        // Si no es más nuevo, evitar sobrescribir el estado actual (posible condición de carrera)
+        // No hacer nada.
       }
     } catch (error) {
       console.error('Error al cargar datos de pesaje:', error);
@@ -283,45 +303,38 @@ export default function RealizarVentaPage() {
     return () => window.removeEventListener('keydown', handler);
   }, []);
 
-  // Suscripción realtime a nuevas lecturas (todas las tablas existentes) para actualización inmediata
+  // Suscripción realtime a nuevas lecturas para actualización inmediata (detecta tabla/columna)
   useEffect(() => {
     let channels: any[] = [];
-    let mounted = true;
+    let cancelled = false;
 
     const setup = async () => {
-      const t = 'lecturas_balanza';
-      const fechaCol = 'fecha_lectura';
+      const { tabla: t, fecha: fechaCol } = await detectarEstructuraLecturas();
+      if (cancelled) return;
       const ch = supabase
         .channel(`rt_${t}`)
         .on('postgres_changes', { event: 'INSERT', schema: 'public', table: t as any }, (payload: any) => {
-              const row: any = payload?.new || {};
-              const peso = Number(row.peso || 0);
-              const producto_id = row.producto_id || null;
-              const fechaVal = row[fechaCol];
-              const idStr = String(row.id);
-              const ts = fechaVal ? new Date(fechaVal).getTime() : 0;
-              // Ignorar eventos viejos y actualizar referencias cuando sea más nuevo
-              if (fechaVal) {
-                if (isNewer(ts, idStr)) {
-                  lastFechaRef.current = ts;
-                  lastIdRef.current = idStr;
-                  setLastAnyLectura({ id: idStr, peso, fecha_lectura: fechaVal, fecha: new Date(fechaVal).toLocaleString('es-AR') });
-                  // Si la lectura no tiene producto, empujarla como última sin reconsultar
-                  if (!producto_id && typeof peso === 'number') {
-                    const nueva = {
-                      id: idStr,
-                      fecha: new Date(fechaVal).toLocaleString('es-AR'),
-                      peso,
-                      producto_id: producto_id,
-                      fecha_lectura: fechaVal,
-                    } as any;
-                    setLecturasBalanza([nueva]);
-                  } else {
-                    // Para otros cambios o payloads incompletos, refrescar en segundo plano
-                    setTimeout(() => { fetchLecturasBalanza().catch(() => {}) }, 0);
-                  }
-                }
-              }
+          const row: any = payload?.new || {};
+          const peso = Number(row.peso || 0);
+          const producto_id = row.producto_id || null;
+          const fechaVal = row[fechaCol];
+          const idStr = String(row.id);
+          const idNum = Number(row.id) || 0;
+
+          // Actualización optimista inmediata si viene fecha en el payload
+          if (fechaVal) {
+            lastFechaRef.current = new Date(fechaVal).getTime();
+            lastIdRef.current = idNum;
+            setLastAnyLectura({ id: idStr, peso, fecha_lectura: fechaVal, fecha: new Date(fechaVal).toLocaleString('es-AR') });
+            if (!producto_id && typeof peso === 'number') {
+              const nueva = { id: idStr, fecha: new Date(fechaVal).toLocaleString('es-AR'), peso, producto_id, fecha_lectura: fechaVal } as any;
+              setLecturasBalanza([nueva]);
+            }
+          }
+
+          // Siempre forzar un refresh ligero para capturar defaults/trigger en BD
+          setTimeout(() => { fetchUltimaLecturaLight(); }, 0);
+          setTimeout(() => { fetchLecturasBalanza().catch(() => {}) }, 0);
         })
         .on('postgres_changes', { event: '*', schema: 'public', table: t as any }, () => {
           setTimeout(() => { fetchLecturasBalanza().catch(() => {}) }, 0);
@@ -331,7 +344,7 @@ export default function RealizarVentaPage() {
     };
 
     setup();
-    return () => { mounted = false; channels.forEach((ch) => { try { supabase.removeChannel(ch) } catch {} }); };
+    return () => { cancelled = true; channels.forEach((ch) => { try { supabase.removeChannel(ch) } catch {} }); };
   }, []);
 
   // Enfoque del diálogo de asociación
@@ -414,10 +427,11 @@ export default function RealizarVentaPage() {
       const fechaVal = r[fecha];
       const ts = new Date(fechaVal).getTime();
       const idStr = String(r.id);
+      const idNum = Number(r.id) || 0;
       // Solo aplicar si es más nuevo que lo último aplicado
-      if (ts >= lastFechaRef.current && idStr !== lastIdRef.current) {
+      if (isNewer(ts, idNum)) {
         lastFechaRef.current = ts;
-        lastIdRef.current = idStr;
+        lastIdRef.current = idNum;
         const entrada = {
           id: idStr,
           fecha: new Date(fechaVal).toLocaleString('es-AR'),

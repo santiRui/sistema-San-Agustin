@@ -89,12 +89,38 @@ export default function ProductosPage() {
     fetchCategorias();
   }, []);
 
-      const filteredProducts = productos.filter(
-    (product) =>
-      (product.nombre || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (product.descripcion || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (categorias.find(c => c.id === product.id_categoria)?.nombre || '').toLowerCase().includes(searchTerm.toLowerCase()),
-  );
+      const normalize = (v: any) => (v ?? "").toString().toLowerCase().trim();
+      const term = normalize(searchTerm);
+
+      const filteredProducts = productos
+        .filter((product) => {
+          const nombre = normalize(product.nombre);
+          const codigo = normalize(product.codigo);
+          const descripcion = normalize(product.descripcion);
+          const categoria = normalize(categorias.find((c) => c.id === product.id_categoria)?.nombre);
+
+          if (!term) return true;
+
+          return (
+            codigo.includes(term) ||
+            nombre.includes(term) ||
+            descripcion.includes(term) ||
+            categoria.includes(term)
+          );
+        })
+        .sort((a, b) => {
+          const score = (p: Producto) => {
+            const n = normalize(p.nombre);
+            const c = normalize(p.codigo);
+            let s = 0;
+            if (c === term) s += 4; // coincidencia exacta por código
+            if (n === term) s += 3; // coincidencia exacta por nombre
+            if (c.startsWith(term)) s += 2; // prefijo por código
+            if (n.startsWith(term)) s += 1; // prefijo por nombre
+            return -s; // menor primero al ordenar
+          };
+          return score(a) - score(b);
+        });
 
   const handleOpenDialog = (product?: Producto) => {
     if (product) {
@@ -272,7 +298,7 @@ export default function ProductosPage() {
           <div className="flex items-center space-x-2">
             <Search className="h-4 w-4 text-gray-400" />
             <Input
-              placeholder="Buscar productos..."
+              placeholder="Buscar por código o nombre..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="max-w-sm"

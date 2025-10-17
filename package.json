@@ -6,7 +6,12 @@
     "build": "next build",
     "dev": "next dev",
     "lint": "next lint",
-    "start": "next start"
+    "start": "next start",
+    "clean": "node -e \"try{require('fs').rmSync('.next',{recursive:true,force:true});}catch(e){} try{require('fs').rmSync('.turbo',{recursive:true,force:true});}catch(e){}\"",
+    "dev:clean": "npm run clean && next dev",
+    "build:clean": "npm run clean && next build",
+    "dev:nocache": "set NEXT_DISABLE_FILE_SYSTEM_CACHE=1 && set NEXT_TELEMETRY_DISABLED=1 && set NEXT_CACHE_DIR=%TEMP%\\next-cache && next dev",
+    "build:nocache": "set NEXT_DISABLE_FILE_SYSTEM_CACHE=1 && set NEXT_TELEMETRY_DISABLED=1 && set NEXT_CACHE_DIR=%TEMP%\\next-cache && next build"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.1",

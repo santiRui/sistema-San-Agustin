@@ -56,7 +56,19 @@ const menuItems = [
     title: "Ventas Hechas",
     url: "/dashboard/ventas",
     icon: Receipt,
-    roles: ["administrador", "encargado"],
+    roles: ["administrador", "encargado", "empleado"],
+  },
+  {
+    title: "Registrar Salida",
+    url: "/dashboard/salidas/nueva",
+    icon: Receipt,
+    roles: ["administrador", "encargado", "empleado"],
+  },
+  {
+    title: "Salidas",
+    url: "/dashboard/salidas",
+    icon: Receipt,
+    roles: ["administrador", "encargado", "empleado"],
   },
   {
     title: "Tickets",
