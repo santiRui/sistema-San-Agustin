@@ -19,6 +19,7 @@ import { format } from "date-fns"
 import { es } from "date-fns/locale"
 import { cn } from "@/lib/utils"
 import { useAlert } from "@/components/AlertProvider"
+import { Checkbox } from "@/components/ui/checkbox"
 
 // Interfaces para los datos
 interface VentaProcesada {
@@ -62,6 +63,9 @@ export default function VentasHechasPage() {
   const [detallesVenta, setDetallesVenta] = useState<DetalleVenta[]>([])
   const [loadingDetails, setLoadingDetails] = useState(false)
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false)
+  // Selección múltiple
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [isBulkDialogOpen, setIsBulkDialogOpen] = useState(false)
 
   useEffect(() => {
     const fetchVentas = async () => {
@@ -163,6 +167,60 @@ export default function VentasHechasPage() {
     } catch (e: any) {
       console.error(e);
       showAlert('Error al eliminar la venta: ' + (e?.message || 'desconocido'), 'error');
+    }
+  };
+
+  const toggleSelectOne = (id: string, checked: boolean) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (checked) next.add(id); else next.delete(id);
+      return next;
+    });
+  };
+
+  const areAllFilteredSelected = (list: VentaProcesada[]) => {
+    if (list.length === 0) return false;
+    return list.every(s => selectedIds.has(s.id));
+  };
+
+  const toggleSelectAllFiltered = (list: VentaProcesada[], checked: boolean) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (checked) {
+        list.forEach(s => next.add(s.id));
+      } else {
+        list.forEach(s => next.delete(s.id));
+      }
+      return next;
+    });
+  };
+
+  const handleBulkDelete = async () => {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    try {
+      // Borrar detalles de todas las ventas seleccionadas
+      const { error: detErr } = await supabase
+        .from('detalles_ventas')
+        .delete()
+        .in('id_venta', ids);
+      if (detErr) throw detErr;
+
+      // Borrar las ventas
+      const { error: ventErr } = await supabase
+        .from('ventas')
+        .delete()
+        .in('id', ids);
+      if (ventErr) throw ventErr;
+
+      // Actualizar estado local y limpiar selección
+      setSales(prev => prev.filter(v => !selectedIds.has(v.id)));
+      setSelectedIds(new Set());
+      setIsBulkDialogOpen(false);
+      showAlert(`Eliminadas ${ids.length} ventas.`, 'success');
+    } catch (e: any) {
+      console.error(e);
+      showAlert('Error en borrado masivo: ' + (e?.message || 'desconocido'), 'error');
     }
   };
 
@@ -381,6 +439,18 @@ export default function VentasHechasPage() {
                 </SelectContent>
               </Select>
             </div>
+            {canDelete && selectedIds.size > 0 && (
+              <div className="sm:ml-auto">
+                <Button
+                  variant="destructive"
+                  className="w-full sm:w-auto"
+                  onClick={() => setIsBulkDialogOpen(true)}
+                >
+                  <Trash2 className="h-4 w-4 mr-1" />
+                  Eliminar seleccionadas ({selectedIds.size})
+                </Button>
+              </div>
+            )}
           </div>
         </CardHeader>
         <CardContent>
@@ -388,6 +458,15 @@ export default function VentasHechasPage() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  {canDelete && (
+                    <TableHead className="w-[40px]">
+                      <Checkbox
+                        checked={areAllFilteredSelected(filteredSales)}
+                        onCheckedChange={(v) => toggleSelectAllFiltered(filteredSales, Boolean(v))}
+                        aria-label="Seleccionar todo"
+                      />
+                    </TableHead>
+                  )}
                   <TableHead className="min-w-[100px]">ID Venta</TableHead>
                   <TableHead className="min-w-[120px]">Fecha</TableHead>
                   <TableHead className="min-w-[120px]">Cliente</TableHead>
@@ -401,13 +480,13 @@ export default function VentasHechasPage() {
             <TableBody>
               {loading ? (
                 <TableRow>
-                  <TableCell colSpan={8} className="text-center py-8 text-gray-500">
+                  <TableCell colSpan={canDelete ? 9 : 8} className="text-center py-8 text-gray-500">
                     Cargando ventas...
                   </TableCell>
                 </TableRow>
               ) : filteredSales.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={8} className="text-center py-8 text-gray-500">
+                  <TableCell colSpan={canDelete ? 9 : 8} className="text-center py-8 text-gray-500">
                     {selectedDate
                       ? `No hay ventas para la fecha ${format(selectedDate, "dd/MM/yyyy", { locale: es })}`
                       : "No se encontraron ventas con los filtros aplicados"}
@@ -416,6 +495,15 @@ export default function VentasHechasPage() {
               ) : (
                 filteredSales.map((sale) => (
                   <TableRow key={sale.id}>
+                    {canDelete && (
+                      <TableCell className="w-[40px]">
+                        <Checkbox
+                          checked={selectedIds.has(sale.id)}
+                          onCheckedChange={(v) => toggleSelectOne(sale.id, Boolean(v))}
+                          aria-label={`Seleccionar venta ${sale.id}`}
+                        />
+                      </TableCell>
+                    )}
                     <TableCell className="font-mono font-medium text-xs sm:text-sm">{sale.id.substring(0, 8)}...</TableCell>
                     <TableCell className="text-xs sm:text-sm">{sale.fecha}</TableCell>
                     <TableCell className="truncate max-w-[120px]">{sale.cliente}</TableCell>
@@ -483,6 +571,25 @@ export default function VentasHechasPage() {
           </div>
         </CardContent>
       </Card>
+
+      {canDelete && (
+        <AlertDialog open={isBulkDialogOpen} onOpenChange={setIsBulkDialogOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Eliminar ventas seleccionadas</AlertDialogTitle>
+              <AlertDialogDescription>
+                Se eliminarán {selectedIds.size} ventas y sus detalles asociados. Esta acción no se puede deshacer.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancelar</AlertDialogCancel>
+              <AlertDialogAction onClick={handleBulkDelete} className="bg-red-600 hover:bg-red-700">
+                Eliminar todo
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      )}
 
       {/* Modal de Detalles de Venta */}
       <Dialog open={isDetailModalOpen} onOpenChange={setIsDetailModalOpen}>
