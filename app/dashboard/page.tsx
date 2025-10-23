@@ -2,11 +2,15 @@
 
 import { useEffect, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Package, ShoppingCart, Receipt, TrendingUp, AlertTriangle } from "lucide-react";
-import { formatDistanceToNow } from 'date-fns';
+import { Package, ShoppingCart, TrendingUp, AlertTriangle, Calendar as CalendarIcon } from "lucide-react";
+import { format, formatDistanceToNow } from 'date-fns';
 import { es } from 'date-fns/locale';
 import { BreadcrumbNav } from "@/components/breadcrumb-nav";
 import { supabase } from "@/lib/supabaseClient";
+import { Calendar } from "@/components/ui/calendar";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 interface Product {
   id: string;
@@ -28,35 +32,38 @@ export default function DashboardPage() {
   const [stats, setStats] = useState({ 
     totalProducts: 0,
     inventoryValue: 0,
-    ventasHoy: 0, 
-    ticketsHoy: 0, 
+    ventasDelDia: 0, 
+    salidasDelDia: 0,
+    cierreCaja: 0,
     lecturasBalanza: 0 
   });
   const [lowStockProducts, setLowStockProducts] = useState<Product[]>([]);
   const [recentSales, setRecentSales] = useState<RecentSale[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [selectedDate, setSelectedDate] = useState<Date | undefined>(undefined);
+  const [isCalendarOpen, setIsCalendarOpen] = useState(false);
 
   useEffect(() => {
     const fetchDashboardData = async () => {
       setIsLoading(true);
 
-      // Solución definitiva para la zona horaria: calcular el día en el cliente
-      const now = new Date();
-      const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
-      const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
+      // Día de referencia (seleccionado o hoy) para KPIs de día
+      const base = selectedDate ?? new Date();
+      const startOfDay = new Date(base.getFullYear(), base.getMonth(), base.getDate(), 0, 0, 0);
+      const endOfDay = new Date(base.getFullYear(), base.getMonth(), base.getDate(), 23, 59, 59);
 
       // Obtener todas las consultas en paralelo
-      const [productsResponse, ventasHoyResponse, ticketsResponse, balanzaResponse, recentSalesResponse] = await Promise.all([
+      const [productsResponse, ventasDiaResponse, salidasDiaResponse, balanzaResponse, recentSalesResponse] = await Promise.all([
         supabase.from('productos').select('id, nombre, stock, stock_minimo, precio, unidad_medida'),
         supabase.from('ventas').select('monto_total').gte('created_at', startOfDay.toISOString()).lte('created_at', endOfDay.toISOString()),
-        supabase.from('tickets').select('id', { count: 'exact' }).gte('created_at', startOfDay.toISOString()).lte('created_at', endOfDay.toISOString()),
+        supabase.from('salidas').select('total').gte('created_at', startOfDay.toISOString()).lte('created_at', endOfDay.toISOString()),
         supabase.from('lecturas_balanza').select('id', { count: 'exact' }),
         supabase.from('ventas').select('id, monto_total, created_at, clientes ( nombre )').order('created_at', { ascending: false }).limit(5)
       ]);
 
       const { data: productsData, error: productsError } = productsResponse;
-      const { data: ventasData, error: ventasError } = ventasHoyResponse;
-      const { data: ticketsData, error: ticketsError } = ticketsResponse;
+      const { data: ventasData, error: ventasError } = ventasDiaResponse;
+      const { data: salidasData, error: salidasError } = salidasDiaResponse;
       const { data: balanzaData, error: balanzaError } = balanzaResponse;
       const { data: recentSalesData, error: recentSalesError } = recentSalesResponse;
 
@@ -70,13 +77,14 @@ export default function DashboardPage() {
 
       // Procesar ventas de hoy
       if (ventasData) {
-        const ventasHoy = ventasData.reduce((sum, v) => sum + v.monto_total, 0);
-        setStats(prev => ({ ...prev, ventasHoy }));
+        const ventasDelDia = ventasData.reduce((sum, v) => sum + v.monto_total, 0);
+        setStats(prev => ({ ...prev, ventasDelDia }));
       }
 
-      // Procesar tickets de hoy
-      if (ticketsData) {
-        setStats(prev => ({ ...prev, ticketsHoy: ticketsError ? 0 : ticketsData.length }));
+      // Procesar salidas del día
+      if (salidasData) {
+        const salidasDelDia = salidasData.reduce((sum, s) => sum + (s.total || 0), 0);
+        setStats(prev => ({ ...prev, salidasDelDia }));
       }
 
       // Procesar lecturas de balanza
@@ -93,11 +101,13 @@ export default function DashboardPage() {
         setRecentSales(processedSales as RecentSale[]);
       }
 
+      // Calcular cierre de caja (ventas - salidas)
+      setStats(prev => ({ ...prev, cierreCaja: (prev.ventasDelDia || 0) - (prev.salidasDelDia || 0) }));
       setIsLoading(false);
     };
 
     fetchDashboardData();
-  }, []);
+  }, [selectedDate]);
 
   const formatUnitText = (unit: string, value: number) => {
     if (!unit) return '';
@@ -115,6 +125,27 @@ export default function DashboardPage() {
       <div>
         <h1 className="text-3xl font-bold text-gray-900">Dashboard</h1>
         <p className="text-gray-600">Resumen general del sistema de la Fiambrería San Agustín</p>
+      </div>
+
+      {/* Selector de fecha para KPIs del día (ventas, salidas y cierre) */}
+      <div className="flex flex-col sm:flex-row flex-wrap gap-2 items-start sm:items-center">
+        <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
+          <PopoverTrigger asChild>
+            <Button
+              variant="outline"
+              className={cn(
+                "w-full sm:w-auto min-w-[200px] justify-start text-left font-normal",
+                !selectedDate && "text-muted-foreground",
+              )}
+            >
+              <CalendarIcon className="mr-2 h-4 w-4" />
+              {selectedDate ? `Día cierre: ${format(selectedDate, "dd/MM/yyyy", { locale: es })}` : `Día cierre: ${format(new Date(), "dd/MM/yyyy", { locale: es })}`}
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent className="w-auto p-0" align="start">
+            <Calendar mode="single" selected={selectedDate} onSelect={(d) => { setSelectedDate(d); setIsCalendarOpen(false); }} initialFocus locale={es} />
+          </PopoverContent>
+        </Popover>
       </div>
 
       {/* Stats Cards */}
@@ -144,9 +175,9 @@ export default function DashboardPage() {
         <Card className="border-l-4 border-l-green-500">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <div>
-              <CardTitle className="text-sm font-medium text-gray-600">Ventas Hoy</CardTitle>
-                            <div className="text-2xl font-bold text-gray-900">{isLoading ? '...' : `$${stats.ventasHoy.toLocaleString()}`}</div>
-              <p className="text-xs text-gray-500 mt-1">Ingresos del día actual</p>
+              <CardTitle className="text-sm font-medium text-gray-600">Ventas del Día</CardTitle>
+              <div className="text-2xl font-bold text-gray-900">{isLoading ? '...' : `$${stats.ventasDelDia.toLocaleString()}`}</div>
+              <p className="text-xs text-gray-500 mt-1">Ingresos de {selectedDate ? format(selectedDate, 'dd/MM/yyyy', { locale: es }) : format(new Date(), 'dd/MM/yyyy', { locale: es })}</p>
             </div>
             <ShoppingCart className="h-8 w-8 text-green-500" />
           </CardHeader>
@@ -155,11 +186,11 @@ export default function DashboardPage() {
         <Card className="border-l-4 border-l-purple-500">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <div>
-              <CardTitle className="text-sm font-medium text-gray-600">Tickets Generados</CardTitle>
-                            <div className="text-2xl font-bold text-gray-900">{isLoading ? '...' : stats.ticketsHoy}</div>
-              <p className="text-xs text-gray-500 mt-1">Tickets emitidos hoy</p>
+              <CardTitle className="text-sm font-medium text-gray-600">Cierre de Caja</CardTitle>
+              <div className="text-2xl font-bold text-gray-900">{isLoading ? '...' : `$${stats.cierreCaja.toLocaleString()}`}</div>
+              <p className="text-xs text-gray-500 mt-1">Ventas - Salidas del día seleccionado</p>
             </div>
-            <Receipt className="h-8 w-8 text-purple-500" />
+            <TrendingUp className="h-8 w-8 text-purple-500" />
           </CardHeader>
         </Card>
 

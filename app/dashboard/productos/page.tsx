@@ -62,7 +62,8 @@ export default function ProductosPage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingProducto, setEditingProducto] = useState<Producto | null>(null);
   const [formData, setFormData] = useState<Partial<Producto>>({});
-    const [searchTerm, setSearchTerm] = useState("");
+  const [searchTerm, setSearchTerm] = useState("");
+  const [lowStockFilter, setLowStockFilter] = useState(false);
   const { showAlert } = useAlert();
   
 
@@ -89,38 +90,51 @@ export default function ProductosPage() {
     fetchCategorias();
   }, []);
 
-      const normalize = (v: any) => (v ?? "").toString().toLowerCase().trim();
-      const term = normalize(searchTerm);
+  const normalize = (v: any) => (v ?? "").toString().toLowerCase().trim();
+  const term = normalize(searchTerm);
 
-      const filteredProducts = productos
-        .filter((product) => {
-          const nombre = normalize(product.nombre);
-          const codigo = normalize(product.codigo);
-          const descripcion = normalize(product.descripcion);
-          const categoria = normalize(categorias.find((c) => c.id === product.id_categoria)?.nombre);
+  const score = (p: Producto) => {
+    const n = normalize(p.nombre);
+    const c = normalize(p.codigo);
+    let s = 0;
+    if (c === term) s += 4; // coincidencia exacta por código
+    if (n === term) s += 3; // coincidencia exacta por nombre
+    if (c.startsWith(term)) s += 2; // prefijo por código
+    if (n.startsWith(term)) s += 1; // prefijo por nombre
+    return -s; // menor primero al ordenar
+  };
 
-          if (!term) return true;
+  const priorityByStock = (p: Producto) => {
+    const stock = p.stock || 0;
+    const min = p.stock_minimo || 0;
+    if (stock < min) return 0; // bajo stock (rojo)
+    if (stock === min) return 1; // en mínimo (amarillo)
+    return 2; // resto
+  };
 
-          return (
-            codigo.includes(term) ||
-            nombre.includes(term) ||
-            descripcion.includes(term) ||
-            categoria.includes(term)
-          );
-        })
-        .sort((a, b) => {
-          const score = (p: Producto) => {
-            const n = normalize(p.nombre);
-            const c = normalize(p.codigo);
-            let s = 0;
-            if (c === term) s += 4; // coincidencia exacta por código
-            if (n === term) s += 3; // coincidencia exacta por nombre
-            if (c.startsWith(term)) s += 2; // prefijo por código
-            if (n.startsWith(term)) s += 1; // prefijo por nombre
-            return -s; // menor primero al ordenar
-          };
-          return score(a) - score(b);
-        });
+  const filteredProducts = productos
+    .filter((product) => {
+      const nombre = normalize(product.nombre);
+      const codigo = normalize(product.codigo);
+      const descripcion = normalize(product.descripcion);
+      const categoria = normalize(categorias.find((c) => c.id === product.id_categoria)?.nombre);
+
+      if (!term) return true;
+
+      return (
+        codigo.includes(term) ||
+        nombre.includes(term) ||
+        descripcion.includes(term) ||
+        categoria.includes(term)
+      );
+    })
+    .sort((a, b) => {
+      if (lowStockFilter) {
+        const prioDiff = priorityByStock(a) - priorityByStock(b);
+        if (prioDiff !== 0) return prioDiff;
+      }
+      return score(a) - score(b);
+    });
 
   const handleOpenDialog = (product?: Producto) => {
     if (product) {
@@ -295,14 +309,23 @@ export default function ProductosPage() {
             Lista de Productos
           </CardTitle>
           <CardDescription>Total de productos: {productos.length}</CardDescription>
-          <div className="flex items-center space-x-2">
-            <Search className="h-4 w-4 text-gray-400" />
-            <Input
-              placeholder="Buscar por código o nombre..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="max-w-sm"
-            />
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Search className="h-4 w-4 text-gray-400" />
+              <Input
+                placeholder="Buscar por código o nombre..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="max-w-sm"
+              />
+            </div>
+            <Button
+              onClick={() => setLowStockFilter((v) => !v)}
+              className={lowStockFilter ? "bg-red-600 hover:bg-red-700" : "border border-red-600 text-red-600 hover:bg-red-50"}
+              variant={lowStockFilter ? "default" : "outline"}
+            >
+              Filtrar por bajo stock
+            </Button>
           </div>
         </CardHeader>
         <CardContent>
@@ -328,14 +351,28 @@ export default function ProductosPage() {
                   <TableCell>${(producto.precio || 0).toLocaleString()}</TableCell>
                   <TableCell>
                     <div className="flex items-center gap-2">
-                      <span className={(producto.stock || 0) < (producto.stock_minimo || 0) ? "text-red-600 font-semibold" : ""}>
-                        {producto.stock || 0}
-                      </span>
-                      {(producto.stock || 0) < (producto.stock_minimo || 0) && (
-                        <Badge variant="destructive" className="bg-red-500 text-white text-xs">
-                          Bajo
-                        </Badge>
-                      )}
+                      {(() => {
+                        const stock = producto.stock || 0;
+                        const min = producto.stock_minimo || 0;
+                        const isLow = stock < min;
+                        const isAtMin = stock === min;
+                        const textClass = isLow
+                          ? "text-red-600 font-semibold"
+                          : isAtMin
+                          ? "text-yellow-600 font-semibold"
+                          : "";
+                        return (
+                          <>
+                            <span className={textClass}>{stock}</span>
+                            {isLow && (
+                              <Badge variant="destructive" className="bg-red-500 text-white text-xs">Bajo</Badge>
+                            )}
+                            {isAtMin && (
+                              <Badge className="bg-yellow-400 text-black text-xs">Mínimo</Badge>
+                            )}
+                          </>
+                        );
+                      })()}
                     </div>
                   </TableCell>
                   <TableCell>{producto.unidad_medida || 'N/A'}</TableCell>

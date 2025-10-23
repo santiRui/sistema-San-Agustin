@@ -57,6 +57,8 @@ export default function VentasHechasPage() {
   const [selectedYear, setSelectedYear] = useState<number | undefined>(undefined)
   const [isCalendarOpen, setIsCalendarOpen] = useState(false)
   const { showAlert } = useAlert();
+  const [fromTime, setFromTime] = useState<string>("")
+  const [toTime, setToTime] = useState<string>("")
 
   // Estados para el modal de detalles
   const [selectedVenta, setSelectedVenta] = useState<VentaProcesada | null>(null)
@@ -237,7 +239,28 @@ export default function VentasHechasPage() {
         sale.fechaDate.getMonth() === selectedDate.getMonth() &&
         sale.fechaDate.getFullYear() === selectedDate.getFullYear())
 
-    return matchesSearch && matchesFilter && matchesDate
+    // Filtro por rango horario dentro del día seleccionado
+    let matchesTimeRange = true;
+    if (selectedDate && (fromTime || toTime)) {
+      const [fh, fm] = (fromTime || "00:00").split(":").map(Number);
+      const [th, tm] = (toTime || "23:59").split(":").map(Number);
+      const start = new Date(selectedDate);
+      start.setHours(isNaN(fh) ? 0 : fh, isNaN(fm) ? 0 : fm, 0, 0);
+      const end = new Date(selectedDate);
+      end.setHours(isNaN(th) ? 23 : th, isNaN(tm) ? 59 : tm, 59, 999);
+      // Si el rango es inválido, intercambiamos
+      const startTime = start.getTime();
+      const endTime = end.getTime();
+      const sTime = sale.fechaDate.getTime();
+      if (startTime <= endTime) {
+        matchesTimeRange = sTime >= startTime && sTime <= endTime;
+      } else {
+        // Caso raro si desde > hasta: considerar que no coincide
+        matchesTimeRange = false;
+      }
+    }
+
+    return matchesSearch && matchesFilter && matchesDate && matchesTimeRange
   })
 
   // Fechas de referencia
@@ -438,6 +461,25 @@ export default function VentasHechasPage() {
                   <SelectItem value="cancelada">Canceladas</SelectItem>
                 </SelectContent>
               </Select>
+            </div>
+            <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+              <Input
+                type="time"
+                value={fromTime}
+                onChange={(e) => setFromTime(e.target.value)}
+                className="w-full sm:w-[140px]"
+                placeholder="Desde"
+              />
+              <Input
+                type="time"
+                value={toTime}
+                onChange={(e) => setToTime(e.target.value)}
+                className="w-full sm:w-[140px]"
+                placeholder="Hasta"
+              />
+              <Button variant="outline" className="w-full sm:w-auto" onClick={() => { setFromTime(""); setToTime(""); }}>
+                Limpiar horas
+              </Button>
             </div>
             {canDelete && selectedIds.size > 0 && (
               <div className="sm:ml-auto">
