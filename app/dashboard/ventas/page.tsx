@@ -281,7 +281,25 @@ export default function VentasHechasPage() {
   const ventasDelDia = sales.filter(
     (sale) => sale.estado === "completada" && esMismoDiaRef(sale.fechaDate, refDay)
   );
-  const montoVentasDelDia = ventasDelDia.reduce((sum, sale) => sum + sale.total, 0);
+  // Para el monto del día, si hay filtro horario activo, considerar solo ventas dentro del rango
+  const estaDentroDelRangoHorario = (date: Date) => {
+    if (!(selectedDate && (fromTime || toTime))) return true;
+    const [fh, fm] = (fromTime || "00:00").split(":").map(Number);
+    const [th, tm] = (toTime || "23:59").split(":").map(Number);
+    const start = new Date(selectedDate);
+    start.setHours(isNaN(fh) ? 0 : fh, isNaN(fm) ? 0 : fm, 0, 0);
+    const end = new Date(selectedDate);
+    end.setHours(isNaN(th) ? 23 : th, isNaN(tm) ? 59 : tm, 59, 999);
+    const startTime = start.getTime();
+    const endTime = end.getTime();
+    const t = date.getTime();
+    if (startTime <= endTime) return t >= startTime && t <= endTime;
+    return false;
+  };
+  const ventasDelDiaParaMonto = sales.filter(
+    (sale) => sale.estado === "completada" && esMismoDiaRef(sale.fechaDate, refDay) && estaDentroDelRangoHorario(sale.fechaDate)
+  );
+  const montoVentasDelDia = ventasDelDiaParaMonto.reduce((sum, sale) => sum + sale.total, 0);
   const cantidadVentasDelDia = ventasDelDia.length;
 
   // Ventas del mes seleccionado (solo completadas)
