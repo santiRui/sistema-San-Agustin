@@ -948,6 +948,9 @@ export default function RealizarVentaPage() {
         }
       }
 
+      const vendedorNombre = ((user as any)?.user_metadata?.full_name || (user as any)?.user_metadata?.name || '').toString();
+      const vendedorEmail = (user as any)?.email || '';
+
       const { data: ventaData, error: ventaError } = await supabase
         .from('ventas')
         .insert({
@@ -958,6 +961,8 @@ export default function RealizarVentaPage() {
           estado: 'completada',
           monto_efectivo: (metodoPago || 'efectivo') === 'mixto' ? montoEfectivo : 0,
           monto_transferencia: (metodoPago || 'efectivo') === 'mixto' ? montoTransfer : 0,
+          vendedor_nombre: vendedorNombre,
+          vendedor_email: vendedorEmail,
         })
         .select('id')
         .single();

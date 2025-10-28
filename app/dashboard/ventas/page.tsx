@@ -27,6 +27,7 @@ interface VentaProcesada {
     fecha: string;
     fechaDate: Date;
     cliente: string;
+    vendedor: string;
     items: number;
     total: number;
     estado: "completada" | "pendiente" | "cancelada";
@@ -91,15 +92,18 @@ export default function VentasHechasPage() {
             mixto_transferencia,
             monto_efectivo,
             monto_transferencia,
+            vendedor_nombre,
+            vendedor_email,
             clientes ( nombre, apellido ),
+            users!ventas_id_usuario_fkey ( email, raw_user_meta_data ),
             detalles_ventas ( id )
           `)
           .order('created_at', { ascending: false });
         data = res1.data as any[] | null;
-        err1 = res1.error;
+        err1 = res1.error && ((res1.error as any).message || (res1.error as any).code) ? res1.error : null;
 
         if (err1) {
-          // Intento 2: sin columnas mixto_* por compatibilidad
+          // Intento 2: sin columnas mixto_* por compatibilidad (manteniendo relación users)
           const res2 = await supabase
             .from('ventas')
             .select(`
@@ -110,17 +114,42 @@ export default function VentasHechasPage() {
               metodo_pago,
               monto_efectivo,
               monto_transferencia,
+              vendedor_nombre,
+              vendedor_email,
               clientes ( nombre, apellido ),
+              users!ventas_id_usuario_fkey ( email, raw_user_meta_data ),
               detalles_ventas ( id )
             `)
             .order('created_at', { ascending: false });
           data = res2.data as any[] | null;
-          if (res2.error) {
-            console.error('Error ventas (fallback):', res2.error);
-            showAlert('Error al cargar las ventas (fallback)', 'error');
-            setSales([]);
-            setLoading(false);
-            return;
+          const err2 = res2.error && ((res2.error as any).message || (res2.error as any).code) ? res2.error : null;
+          if (err2) {
+            // Intento 3: sin relación users para máxima compatibilidad
+            const res3 = await supabase
+              .from('ventas')
+              .select(`
+                id,
+                created_at,
+                monto_total,
+                estado,
+                metodo_pago,
+                monto_efectivo,
+                monto_transferencia,
+                vendedor_nombre,
+                vendedor_email,
+                clientes ( nombre, apellido ),
+                detalles_ventas ( id )
+              `)
+              .order('created_at', { ascending: false });
+            data = res3.data as any[] | null;
+            const err3 = res3.error && ((res3.error as any).message || (res3.error as any).code) ? res3.error : null;
+            if (err3) {
+              console.error('Error ventas (fallback):', err3);
+              showAlert('Error al cargar las ventas (fallback)', 'error');
+              setSales([]);
+              setLoading(false);
+              return;
+            }
           }
         }
 
@@ -135,11 +164,20 @@ export default function VentasHechasPage() {
           const detalles = Array.isArray(venta.detalles_ventas)
             ? venta.detalles_ventas
             : (venta.detalles_ventas ? [venta.detalles_ventas] : []);
+          const localNombre = (venta.vendedor_nombre || '').toString().trim();
+          const localEmail = (venta.vendedor_email || '').toString().trim();
+          let vendedor = localNombre || localEmail;
+          if (!vendedor) {
+            const userRow = Array.isArray(venta.users) ? venta.users[0] : (venta.users || null);
+            const meta = userRow?.raw_user_meta_data || {};
+            vendedor = ((meta.full_name || meta.name || '') as string).toString().trim() || (userRow?.email || '');
+          }
           return {
             id: venta.id,
             fecha: format(new Date(venta.created_at), "dd/MM/yyyy HH:mm", { locale: es }),
             fechaDate: new Date(venta.created_at),
             cliente: venta.clientes ? `${venta.clientes.nombre} ${venta.clientes.apellido}` : "Cliente no disponible",
+            vendedor,
             items: detalles.length,
             total: Number(venta.monto_total) || 0,
             estado: (venta.estado as any) || 'completada',
@@ -586,6 +624,7 @@ export default function VentasHechasPage() {
                   <TableHead className="min-w-[100px]">ID Venta</TableHead>
                   <TableHead className="min-w-[120px]">Fecha</TableHead>
                   <TableHead className="min-w-[120px]">Cliente</TableHead>
+                  <TableHead className="min-w-[140px]">Vendedor</TableHead>
                   <TableHead className="hidden sm:table-cell">Items</TableHead>
                   <TableHead className="min-w-[100px]">Total</TableHead>
                   <TableHead className="hidden md:table-cell">Método Pago</TableHead>
@@ -623,6 +662,7 @@ export default function VentasHechasPage() {
                     <TableCell className="font-mono font-medium text-xs sm:text-sm">{sale.id.substring(0, 8)}...</TableCell>
                     <TableCell className="text-xs sm:text-sm">{sale.fecha}</TableCell>
                     <TableCell className="truncate max-w-[120px]">{sale.cliente}</TableCell>
+                    <TableCell className="truncate max-w-[160px]">{sale.vendedor || '—'}</TableCell>
                     <TableCell className="hidden sm:table-cell">{sale.items} items</TableCell>
                     <TableCell className="font-semibold">${sale.total.toLocaleString()}</TableCell>
                     <TableCell className="hidden md:table-cell">
@@ -739,6 +779,9 @@ export default function VentasHechasPage() {
                     
                     <div className="font-semibold">Cliente:</div>
                     <div className="sm:col-span-3 break-words">{selectedVenta.cliente}</div>
+
+                    <div className="font-semibold">Vendedor:</div>
+                    <div className="sm:col-span-3 break-words">{selectedVenta.vendedor || '—'}</div>
 
                     <div className="font-semibold">Fecha:</div>
                     <div className="sm:col-span-3">{selectedVenta.fecha}</div>
