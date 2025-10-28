@@ -752,11 +752,7 @@ export default function RealizarVentaPage() {
 
   // Función para agregar item desde datos de pesaje
   const agregarItemDesdePesaje = (lectura: LecturaBalanza) => {
-    // Regla: solo un producto por peso/lectura en la venta
-    if (items.some(i => i.unidad_medida !== 'unidades')) {
-      showAlert('Solo se permite un producto por peso en la venta. Procese la venta o elimine el ítem pesado antes de agregar otro.', 'error');
-      return;
-    }
+    
     // Evitar reutilizar lecturas marcadas
     if (lectura.usado || lectura.id_venta) {
       showAlert('Este pesaje ya fue utilizado en una venta y no puede reutilizarse.', 'error');
@@ -822,11 +818,7 @@ export default function RealizarVentaPage() {
     }
 
     const producto = selectedProduct;
-    // Regla: solo un producto por peso (kg/gramos)
-    if (unidadMedida !== 'unidades' && items.some(i => i.unidad_medida !== 'unidades')) {
-      showAlert('Ya hay un producto por peso en la venta. Procese la venta o elimine el ítem pesado antes de agregar otro.', 'error');
-      return;
-    }
+    
     const cantidadNum = Number.parseFloat(cantidad);
 
     if (cantidadNum <= 0) {
