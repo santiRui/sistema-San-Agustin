@@ -26,13 +26,19 @@ const menuItems = [
     title: "Dashboard",
     url: "/dashboard",
     icon: Home,
-    roles: ["administrador", "encargado", "empleado"],
+    roles: ["administrador", "encargado"],
   },
   {
     title: "Productos",
     url: "/dashboard/productos",
     icon: Package,
     roles: ["administrador", "encargado", "empleado"],
+  },
+  {
+    title: "Lista de compras",
+    url: "/dashboard/lista-compras",
+    icon: Package,
+    roles: ["administrador", "encargado"],
   },
   {
     title: "Categorías",
@@ -56,7 +62,7 @@ const menuItems = [
     title: "Ventas Hechas",
     url: "/dashboard/ventas",
     icon: Receipt,
-    roles: ["administrador", "encargado", "empleado"],
+    roles: ["administrador", "encargado"],
   },
   {
     title: "Registrar Salida",
@@ -68,7 +74,7 @@ const menuItems = [
     title: "Salidas",
     url: "/dashboard/salidas",
     icon: Receipt,
-    roles: ["administrador", "encargado", "empleado"],
+    roles: ["administrador", "encargado"],
   },
   {
     title: "Tickets",
@@ -80,7 +86,7 @@ const menuItems = [
     title: "Lecturas Balanza",
     url: "/dashboard/balanza",
     icon: Weight,
-    roles: ["administrador", "encargado", "empleado"],
+    roles: ["administrador", "encargado"],
   },
 ];
 
