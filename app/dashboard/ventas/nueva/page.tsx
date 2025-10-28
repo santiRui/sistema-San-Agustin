@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect, useRef, useMemo } from "react"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -75,6 +75,8 @@ export default function RealizarVentaPage() {
   
   const [clienteId, setClienteId] = useState<string | null>(null);
   const [metodoPago, setMetodoPago] = useState("");
+  const [mixtoEfectivo, setMixtoEfectivo] = useState<string>("");
+  const [mixtoTransferencia, setMixtoTransferencia] = useState<string>("");
   const [items, setItems] = useState<VentaItem[]>([]);
   
   const [productoSeleccionadoId, setProductoSeleccionadoId] = useState<string | null>(null);
@@ -82,6 +84,7 @@ export default function RealizarVentaPage() {
   const [cantidad, setCantidad] = useState("");
   // Búsqueda de productos
   const [productSearchTerm, setProductSearchTerm] = useState('');
+  const [debouncedProductTerm, setDebouncedProductTerm] = useState('');
   const [showProductSuggestions, setShowProductSuggestions] = useState(false);
   // Referencias y estado para flujo con teclado y pesaje
   const productInputRef = useRef<HTMLInputElement | null>(null);
@@ -92,18 +95,32 @@ export default function RealizarVentaPage() {
   // Asociación rápida desde esta pantalla
   const [isAssocDialogOpen, setIsAssocDialogOpen] = useState(false);
   const [assocSearchTerm, setAssocSearchTerm] = useState('');
+  const [debouncedAssocTerm, setDebouncedAssocTerm] = useState('');
   const assocInputRef = useRef<HTMLInputElement | null>(null);
   const [lecturaParaAsociar, setLecturaParaAsociar] = useState<LecturaBalanza | null>(null);
   // CTA dinámico: 'associate' cuando hay pesaje sin producto, 'process' cuando todo listo
   const [ctaMode, setCtaMode] = useState<'associate' | 'process'>('associate');
   const associateBtnRef = useRef<HTMLButtonElement | null>(null);
   const processBtnRef = useRef<HTMLButtonElement | null>(null);
+  const [assocActiveIndex, setAssocActiveIndex] = useState<number>(-1);
+  const [productActiveIndex, setProductActiveIndex] = useState<number>(-1);
+  const assocActiveElRef = useRef<HTMLButtonElement | HTMLDivElement | null>(null);
+  const productActiveElRef = useRef<HTMLDivElement | null>(null);
   // Editar datos de venta
   const [isEditSaleInfoOpen, setIsEditSaleInfoOpen] = useState(false);
+  const clienteSelectTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const metodoSelectTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const [isClienteSelectOpen, setIsClienteSelectOpen] = useState(false);
+  const [isMetodoSelectOpen, setIsMetodoSelectOpen] = useState(false);
+  const [editSaleField, setEditSaleField] = useState<'cliente' | 'metodo' | 'ambos'>('ambos');
   // Estado de procesamiento de venta
   const [isProcessing, setIsProcessing] = useState(false);
   // Estado para evitar múltiples asociaciones por Enter repetido
   const [isAssociating, setIsAssociating] = useState(false);
+  // Flag de superposición que bloquea procesar venta con teclado
+  const hasBlockingOverlay = isEditSaleInfoOpen || isAssocDialogOpen || isClienteSelectOpen || isMetodoSelectOpen;
+  // Ventana corta para ignorar Enter/Espacio que cerró un diálogo
+  const ignoreNextEnterSpaceUntilRef = useRef<number>(0);
   // Última lectura absoluta (aunque no esté disponible para asociar)
   const [lastAnyLectura, setLastAnyLectura] = useState<Pick<LecturaBalanza, 'id'|'peso'|'fecha_lectura'|'fecha'> | null>(null);
 
@@ -225,22 +242,24 @@ export default function RealizarVentaPage() {
         return;
       }
 
-      // Procesar lecturas con información de productos
-      const lecturasConProductos = [];
+      // Procesar lecturas con información de productos (optimizado: una sola consulta IN)
+      const lecturasConProductos: any[] = [];
       const filas: any[] = Array.isArray(lecturasData) ? (lecturasData as any[]) : [];
-      for (const lecturaAny of filas) {
-        let productoInfo = null;
-        
-        if (lecturaAny.producto_id) {
-          const { data: productoData } = await supabase
-            .from('productos')
-            .select('id, codigo, nombre, precio, unidad_medida')
-            .eq('id', lecturaAny.producto_id)
-            .single();
-          
-          productoInfo = productoData;
+      const productIds = Array.from(new Set(
+        filas.map((r: any) => r.producto_id).filter((v: any) => !!v)
+      ));
+      let productosMap: Record<string, { id: string; codigo: string; nombre: string; precio: number; unidad_medida: string }> = {};
+      if (productIds.length > 0) {
+        const { data: productosBulk, error: prodErr } = await supabase
+          .from('productos')
+          .select('id, codigo, nombre, precio, unidad_medida')
+          .in('id', productIds);
+        if (!prodErr && Array.isArray(productosBulk)) {
+          productosBulk.forEach((p: any) => { productosMap[p.id] = p; });
         }
-
+      }
+      for (const lecturaAny of filas) {
+        const productoInfo = lecturaAny.producto_id ? productosMap[lecturaAny.producto_id] : null;
         lecturasConProductos.push({
           id: String(lecturaAny.id),
           fecha: new Date(lecturaAny[fecha]).toLocaleString('es-AR'),
@@ -288,9 +307,21 @@ export default function RealizarVentaPage() {
   // Atajos de teclado globales: Ctrl+Enter finaliza venta, Escape limpia estado de entrada
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      const now = Date.now();
+      if ((e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') && now < (ignoreNextEnterSpaceUntilRef.current || 0)) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+      // Si hay un diálogo o un Select abierto, bloquear Enter/Espacio globales
+      if (hasBlockingOverlay && (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar')) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
         e.preventDefault();
-        procesarVenta();
+        if (!hasBlockingOverlay) procesarVenta();
       }
       if (e.key === 'Escape') {
         setLecturaPendiente(null);
@@ -301,7 +332,20 @@ export default function RealizarVentaPage() {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, []);
+  }, [hasBlockingOverlay]);
+
+  // Enfocar control adecuado al abrir el diálogo de edición
+  useEffect(() => {
+    if (isEditSaleInfoOpen) {
+      setTimeout(() => {
+        if (editSaleField === 'cliente' || editSaleField === 'ambos') {
+          clienteSelectTriggerRef.current?.focus();
+        } else if (editSaleField === 'metodo') {
+          metodoSelectTriggerRef.current?.focus();
+        }
+      }, 0);
+    }
+  }, [isEditSaleInfoOpen, editSaleField]);
 
   // Suscripción realtime a nuevas lecturas para actualización inmediata (detecta tabla/columna)
   useEffect(() => {
@@ -355,6 +399,32 @@ export default function RealizarVentaPage() {
   }, [isAssocDialogOpen]);
 
   useEffect(() => {
+    setAssocActiveIndex(-1);
+  }, [assocSearchTerm, isAssocDialogOpen]);
+
+  useEffect(() => {
+    setProductActiveIndex(-1);
+  }, [productSearchTerm, showProductSuggestions]);
+
+  // Debounce de términos de búsqueda (120ms)
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedProductTerm(productSearchTerm), 120);
+    return () => clearTimeout(t);
+  }, [productSearchTerm]);
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedAssocTerm(assocSearchTerm), 120);
+    return () => clearTimeout(t);
+  }, [assocSearchTerm]);
+
+  // Auto-scroll al ítem activo de sugerencias
+  useEffect(() => {
+    try { assocActiveElRef.current?.scrollIntoView({ block: 'nearest' }); } catch {}
+  }, [assocActiveIndex]);
+  useEffect(() => {
+    try { productActiveElRef.current?.scrollIntoView({ block: 'nearest' }); } catch {}
+  }, [productActiveIndex]);
+
+  useEffect(() => {
     const fetchData = async () => {
       const { data: productosData, error: productosError } = await supabase.from('productos').select('*');
       if (productosError) showAlert('Error al cargar productos', 'error');
@@ -385,7 +455,7 @@ export default function RealizarVentaPage() {
     if (!pollingRef.current) {
       pollingRef.current = setInterval(async () => {
         await fetchLecturasBalanza();
-      }, 30); // refresco ultra frecuente
+      }, 300); // refresco más razonable
     }
     return () => {
       if (pollingRef.current) {
@@ -459,7 +529,7 @@ export default function RealizarVentaPage() {
   useEffect(() => {
     const interval = setInterval(() => {
       fetchUltimaLecturaLight();
-    }, 30);
+    }, 300);
     return () => clearInterval(interval);
   }, []);
 
@@ -592,7 +662,13 @@ export default function RealizarVentaPage() {
     if (!lecturaParaAsociar) return;
     if (isAssociating) return;
     setIsAssociating(true);
+    // Watchdog: evita quedar bloqueado si la operación demora demasiado
+    let watchdog: any = null;
     try {
+      watchdog = setTimeout(() => {
+        try { setIsAssociating(false); } catch {}
+        try { showAlert('La asociación está tardando más de lo esperado. Verificá tu conexión e intentá nuevamente.', 'error'); } catch {}
+      }, 10000);
       // Evitar duplicado del mismo pesaje por Enter repetido
       if (items.some(i => i.lectura_id === lecturaParaAsociar.id)) {
         showAlert('Este pesaje ya está en el carrito.', 'error');
@@ -642,13 +718,14 @@ export default function RealizarVentaPage() {
       setIsAssocDialogOpen(false);
       setLecturaParaAsociar(null);
       setAssocSearchTerm('');
-      // Refrescar lecturas para que figure como asociada
-      await fetchLecturasBalanza();
+      // Refrescar lecturas para que figure como asociada (no bloquear la UI)
+      setTimeout(() => { fetchLecturasBalanza().catch(() => {}) }, 0);
       // Cambiar CTA a procesar si no quedan sin asociar
       if (!hasUnassociated) setCtaMode('process');
       // Enfocar botón de procesar para que Enter cierre la venta
       setTimeout(() => processBtnRef.current?.focus(), 0);
     } finally {
+      if (watchdog) { try { clearTimeout(watchdog); } catch {} }
       setIsAssociating(false);
     }
   };
@@ -861,6 +938,24 @@ export default function RealizarVentaPage() {
       // Asegurar cliente obligatorio
       const clienteParaVenta = clienteId || await ensureClienteGeneral();
 
+      // Validación de método mixto
+      let montoEfectivo = 0;
+      let montoTransfer = 0;
+      if ((metodoPago || 'efectivo') === 'mixto') {
+        montoEfectivo = Number(mixtoEfectivo || 0);
+        montoTransfer = Number(mixtoTransferencia || 0);
+        if (montoEfectivo < 0 || montoTransfer < 0) {
+          showAlert('Los montos de efectivo y transferencia no pueden ser negativos.', 'error');
+          return;
+        }
+        const suma = Number((montoEfectivo + montoTransfer).toFixed(2));
+        const totalRounded = Number(total.toFixed(2));
+        if (suma !== totalRounded) {
+          showAlert(`La suma de efectivo ($${montoEfectivo.toLocaleString()}) y transferencia ($${montoTransfer.toLocaleString()}) debe ser igual al total ($${totalRounded.toLocaleString()}).`, 'error');
+          return;
+        }
+      }
+
       const { data: ventaData, error: ventaError } = await supabase
         .from('ventas')
         .insert({
@@ -869,6 +964,8 @@ export default function RealizarVentaPage() {
           monto_total: total,
           metodo_pago: metodoPago || 'efectivo',
           estado: 'completada',
+          monto_efectivo: (metodoPago || 'efectivo') === 'mixto' ? montoEfectivo : 0,
+          monto_transferencia: (metodoPago || 'efectivo') === 'mixto' ? montoTransfer : 0,
         })
         .select('id')
         .single();
@@ -985,6 +1082,8 @@ export default function RealizarVentaPage() {
       // Resetear formulario para nueva venta
       setClienteId(null);
       setMetodoPago("");
+      setMixtoEfectivo("");
+      setMixtoTransferencia("");
       setItems([]);
       setProductoSeleccionadoId(null);
       setProductSearchTerm("");
@@ -1059,92 +1158,134 @@ export default function RealizarVentaPage() {
                   Escribir nombre del producto (Enter)
                 </Button>
               ) : (
-                <Button ref={processBtnRef} className="bg-green-600 hover:bg-green-700" onClick={procesarVenta} disabled={items.length === 0}>
+                <Button
+                  ref={processBtnRef}
+                  className="bg-green-600 hover:bg-green-700"
+                  onClick={(e) => {
+                    if (hasBlockingOverlay) { e.preventDefault(); return; }
+                    procesarVenta();
+                  }}
+                  onKeyDown={(e) => {
+                    if (hasBlockingOverlay) { e.preventDefault(); e.stopPropagation(); return; }
+                    if (e.key === ' ' || e.key === 'Spacebar') {
+                      e.preventDefault();
+                      procesarVenta();
+                    }
+                  }}
+                  disabled={items.length === 0 || hasBlockingOverlay}
+                >
                   Procesar venta (Enter)
                 </Button>
               )}
             </div>
           </div>
-        </CardContent>
-      </Card>
+      </CardContent>
+    </Card>
 
-      {/* Diálogo rápido para asociar producto a la lectura actual */}
-      <Dialog open={isAssocDialogOpen} onOpenChange={setIsAssocDialogOpen}>
-        <DialogContent className="sm:max-w-[500px]">
-          <DialogHeader>
-            <DialogTitle>Asociar producto a pesaje</DialogTitle>
-            <DialogDescription>
-              Escribí el código o nombre del producto y presioná Enter para asociar el más coincidente.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-3">
-            {lecturaParaAsociar && (
-              <div className="bg-gray-50 rounded p-3 text-sm">
-                <div><strong>Peso:</strong> {lecturaParaAsociar.peso.toFixed(3)} kg</div>
-                <div className="text-gray-500">Fecha: {new Date(lecturaParaAsociar.fecha_lectura).toLocaleString('es-AR')}</div>
-              </div>
-            )}
-            <div>
-              <Label htmlFor="assoc-code">Código o nombre</Label>
-              <Input
-                id="assoc-code"
-                ref={assocInputRef}
-                value={assocSearchTerm}
-                onChange={(e) => setAssocSearchTerm(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
+    {/* Diálogo para asociar producto al último pesaje */}
+    <Dialog open={isAssocDialogOpen} onOpenChange={setIsAssocDialogOpen}>
+      <DialogContent
+        className="sm:max-w-[520px]"
+        onKeyDown={(e) => {
+          // Evitar que Enter o Space activen el botón de Procesar detrás
+          if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+            e.stopPropagation();
+          }
+        }}
+      >
+        <DialogHeader>
+          <DialogTitle>Asociar producto a pesaje</DialogTitle>
+          <DialogDescription>
+            Escribí el código o nombre del producto y presioná Enter para asociar el más coincidente.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          {lecturaParaAsociar && (
+            <div className="bg-gray-50 rounded p-3 text-sm">
+              <div><strong>Peso:</strong> {lecturaParaAsociar?.peso?.toFixed(3)} kg</div>
+              <div className="text-gray-500">Fecha: {lecturaParaAsociar?.fecha_lectura ? new Date(lecturaParaAsociar.fecha_lectura).toLocaleString('es-AR') : ''}</div>
+            </div>
+          )}
+          <div>
+            <Label htmlFor="assoc-code">Código o nombre</Label>
+            <Input
+              id="assoc-code"
+              ref={assocInputRef}
+              value={assocSearchTerm}
+              onChange={(e) => setAssocSearchTerm(e.target.value)}
+              onKeyDown={(e) => {
+                const list = assocSuggestions(debouncedAssocTerm);
+                if (e.key === 'ArrowDown') {
+                  e.preventDefault();
+                  setAssocActiveIndex((prev) => Math.min(prev + 1, list.length - 1));
+                  return;
+                }
+                if (e.key === 'ArrowUp') {
+                  e.preventDefault();
+                  setAssocActiveIndex((prev) => Math.max(prev - 1, -1));
+                  return;
+                }
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  if (assocActiveIndex >= 0 && assocActiveIndex < list.length) {
+                    const chosen = list[assocActiveIndex];
+                    setAssocSearchTerm(chosen.codigo);
+                    setTimeout(() => handleConfirmAssociate(), 0);
+                  } else {
                     handleConfirmAssociate();
                   }
-                }}
-                placeholder="Ej: JAMON01"
-              />
-              <p className="text-xs text-gray-500 mt-1">Enter asocia el producto que coincida exactamente con el código o el más similar.</p>
-              {/* Sugerencias en vivo */}
-              <div className="mt-2 border rounded-md max-h-56 overflow-y-auto divide-y">
-                {assocSuggestions(assocSearchTerm).map((p) => (
-                  <button
-                    key={p.id}
-                    type="button"
-                    className="w-full text-left px-3 py-2 hover:bg-gray-50 focus:bg-gray-50 focus:outline-none"
-                    onClick={() => {
-                      setAssocSearchTerm(p.codigo);
-                      // confirmar inmediatamente
-                      setTimeout(() => handleConfirmAssociate(), 0);
-                    }}
-                  >
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <div className="font-medium text-gray-900">{p.nombre}</div>
-                        <div className="text-xs text-gray-500 font-mono">{p.codigo}</div>
-                      </div>
-                      <div className="text-sm text-gray-700">${(p.precio ?? 0).toLocaleString()}</div>
+                }
+              }}
+              placeholder="Ej: JAMON01"
+            />
+            <p className="text-xs text-gray-500 mt-1">Enter asocia el producto que coincida exactamente con el código o el más similar.</p>
+            {/* Sugerencias en vivo */}
+            <div className="mt-2 border rounded-md max-h-56 overflow-y-auto divide-y">
+              {assocSuggestions(debouncedAssocTerm).map((p, idx) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  className={`w-full text-left px-3 py-2 hover:bg-gray-50 focus:bg-gray-50 focus:outline-none ${idx === assocActiveIndex ? 'bg-gray-100' : ''}`}
+                  onMouseEnter={() => setAssocActiveIndex(idx)}
+                  ref={idx === assocActiveIndex ? (el) => { assocActiveElRef.current = el } : undefined}
+                  onClick={() => {
+                    setAssocSearchTerm(p.codigo);
+                    // confirmar inmediatamente
+                    setTimeout(() => handleConfirmAssociate(), 0);
+                  }}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="font-medium text-gray-900">{p.nombre}</div>
+                      <div className="text-xs text-gray-500 font-mono">{p.codigo}</div>
                     </div>
-                  </button>
-                ))}
-                {assocSuggestions(assocSearchTerm).length === 0 && (
-                  <div className="px-3 py-2 text-sm text-gray-500">Sin sugerencias</div>
-                )}
-              </div>
+                    <div className="text-sm text-gray-700">${(p.precio ?? 0).toLocaleString()}</div>
+                  </div>
+                </button>
+              ))}
+              {assocSuggestions(debouncedAssocTerm).length === 0 && (
+                <div className="px-3 py-2 text-sm text-gray-500">Sin sugerencias</div>
+              )}
             </div>
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setIsAssocDialogOpen(false)} disabled={isAssociating}>Cancelar</Button>
-            <Button onClick={handleConfirmAssociate} disabled={isAssociating} aria-busy={isAssociating}>
-              {isAssociating ? 'Asociando...' : 'Asociar y agregar'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setIsAssocDialogOpen(false)} disabled={isAssociating}>Cancelar</Button>
+          <Button onClick={handleConfirmAssociate} disabled={isAssociating} aria-busy={isAssociating}>
+            {isAssociating ? 'Asociando...' : 'Asociar y agregar'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
 
-      {/* Resumen de Venta inmediatamente después del flujo rápido */}
-      <Card className="mt-4">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Calculator className="h-5 w-5" />
-            Resumen de Venta
-          </CardTitle>
-        </CardHeader>
+    {/* Resumen de Venta inmediatamente después del flujo rápido */}
+    <Card className="mt-4">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Calculator className="h-5 w-5" />
+          Resumen de Venta
+        </CardTitle>
+      </CardHeader>
         <CardContent className="space-y-4">
           <div className="space-y-2">
             <div className="flex justify-between font-semibold text-lg">
@@ -1155,21 +1296,58 @@ export default function RealizarVentaPage() {
           <div className="space-y-2 text-sm text-gray-600">
             <div className="flex justify-between">
               <span>Cliente:</span>
-              <button className="text-left underline decoration-dotted hover:decoration-solid" onClick={() => setIsEditSaleInfoOpen(true)}>
-                {selectedCliente ? `${selectedCliente.nombre} ${selectedCliente.apellido}` : "Venta General"}
+              <button className="text-left underline decoration-dotted hover:decoration-solid" onClick={() => { setEditSaleField('cliente'); setIsEditSaleInfoOpen(true); }}>
+                {selectedCliente ? `${selectedCliente?.nombre} ${selectedCliente?.apellido}` : "Venta General"}
               </button>
             </div>
-            <div className="flex justify-between">
+            <div className="flex justify-between items-center">
               <span>Método de pago:</span>
-              <button className="text-left underline decoration-dotted hover:decoration-solid" onClick={() => setIsEditSaleInfoOpen(true)}>
+              <button className="text-left underline decoration-dotted hover:decoration-solid" onClick={() => { setEditSaleField('metodo'); setIsEditSaleInfoOpen(true); }}>
                 {metodoPago || 'efectivo'}
               </button>
             </div>
+            {metodoPago === 'mixto' && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <Label htmlFor="mixto-efectivo">Efectivo</Label>
+                  <Input
+                    id="mixto-efectivo"
+                    type="number"
+                    inputMode="decimal"
+                    min={0}
+                    step={0.01}
+                    value={mixtoEfectivo}
+                    onChange={(e) => setMixtoEfectivo(e.target.value)}
+                    placeholder="0.00"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="mixto-transfer">Transferencia</Label>
+                  <Input
+                    id="mixto-transfer"
+                    type="number"
+                    inputMode="decimal"
+                    min={0}
+                    step={0.01}
+                    value={mixtoTransferencia}
+                    onChange={(e) => setMixtoTransferencia(e.target.value)}
+                    placeholder="0.00"
+                  />
+                </div>
+                <div className="sm:col-span-2 text-xs text-gray-600">
+                  Suma: ${(Number(mixtoEfectivo||0)+Number(mixtoTransferencia||0)).toLocaleString()} / Total: ${total.toLocaleString()}
+                </div>
+              </div>
+            )}
           </div>
           <Button
             ref={processBtnRef}
-            onClick={procesarVenta}
+            onClick={(e) => {
+              if (hasBlockingOverlay) { e.preventDefault(); return; }
+              procesarVenta();
+            }}
             onKeyDown={(e) => {
+              if (hasBlockingOverlay) { e.preventDefault(); e.stopPropagation(); return; }
               if (e.key === ' ' || e.key === 'Spacebar') {
                 e.preventDefault();
                 if (!isProcessing) procesarVenta();
@@ -1187,43 +1365,159 @@ export default function RealizarVentaPage() {
 
       {/* Diálogo para editar Cliente y Método de pago */}
       <Dialog open={isEditSaleInfoOpen} onOpenChange={setIsEditSaleInfoOpen}>
-        <DialogContent className="sm:max-w-[500px]">
+        <DialogContent
+          className="sm:max-w-[500px]"
+          onKeyDown={(e) => {
+            // No propagar a botones por detrás
+            if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+              e.stopPropagation();
+            }
+            if (e.key === 'Enter' && !isClienteSelectOpen && !isMetodoSelectOpen) {
+              e.preventDefault();
+              // Validar mixto antes de cerrar
+              if ((metodoPago || 'efectivo') === 'mixto') {
+                const ef = Number(mixtoEfectivo || 0);
+                const tr = Number(mixtoTransferencia || 0);
+                const suma = Number((ef + tr).toFixed(2));
+                const totalRounded = Number(total.toFixed(2));
+                if (suma !== totalRounded) {
+                  showAlert(`La suma de efectivo y transferencia debe ser igual al total ($${totalRounded.toLocaleString()}).`, 'error');
+                  return;
+                }
+              }
+              ignoreNextEnterSpaceUntilRef.current = Date.now() + 250;
+              setIsEditSaleInfoOpen(false);
+              setTimeout(() => processBtnRef.current?.focus(), 0);
+            }
+          }}
+        >
           <DialogHeader>
-            <DialogTitle>Editar datos de la venta</DialogTitle>
-            <DialogDescription>Podés cambiar el cliente y el método de pago predeterminados.</DialogDescription>
+            <DialogTitle>
+              {editSaleField === 'cliente' ? 'Editar cliente' : editSaleField === 'metodo' ? 'Editar método de pago' : 'Editar datos de la venta'}
+            </DialogTitle>
+            <DialogDescription>
+              {editSaleField === 'cliente' ? 'Seleccioná el cliente de la venta.' : editSaleField === 'metodo' ? 'Seleccioná el método de pago.' : 'Podés cambiar el cliente y el método de pago.'}
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
-            <div>
-              <Label>Cliente</Label>
-              <Select value={clienteId || ''} onValueChange={setClienteId}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Seleccionar cliente" />
-                </SelectTrigger>
-                <SelectContent>
-                  {clientes.map((c) => (
-                    <SelectItem key={c.id} value={c.id}>{c.nombre} {c.apellido}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label>Método de Pago</Label>
-              <Select value={metodoPago || 'efectivo'} onValueChange={setMetodoPago}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Seleccionar método" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="efectivo">Efectivo</SelectItem>
-                  <SelectItem value="tarjeta_debito">Tarjeta de Débito</SelectItem>
-                  <SelectItem value="tarjeta_credito">Tarjeta de Crédito</SelectItem>
-                  <SelectItem value="transferencia">Transferencia</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
+            {editSaleField !== 'metodo' && (
+              <div>
+                <Label>Cliente</Label>
+                <Select
+                  value={clienteId || ''}
+                  onValueChange={setClienteId}
+                  open={isClienteSelectOpen}
+                  onOpenChange={setIsClienteSelectOpen}
+                >
+                  <SelectTrigger
+                    ref={clienteSelectTriggerRef}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === 'ArrowDown') {
+                        e.preventDefault();
+                        setIsClienteSelectOpen(true);
+                      }
+                    }}
+                  >
+                    <SelectValue placeholder="Seleccionar cliente" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {clientes.map((c) => (
+                      <SelectItem key={c.id} value={c.id}>{c.nombre} {c.apellido}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+            {editSaleField !== 'cliente' && (
+              <div>
+                <Label>Método de Pago</Label>
+                <Select
+                  value={metodoPago || 'efectivo'}
+                  onValueChange={setMetodoPago}
+                  open={isMetodoSelectOpen}
+                  onOpenChange={setIsMetodoSelectOpen}
+                >
+                  <SelectTrigger
+                    ref={metodoSelectTriggerRef}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === 'ArrowDown') {
+                        e.preventDefault();
+                        setIsMetodoSelectOpen(true);
+                      }
+                    }}
+                  >
+                    <SelectValue placeholder="Seleccionar método" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="efectivo">Efectivo</SelectItem>
+                    <SelectItem value="tarjeta_debito">Tarjeta de Débito</SelectItem>
+                    <SelectItem value="tarjeta_credito">Tarjeta de Crédito</SelectItem>
+                    <SelectItem value="transferencia">Transferencia</SelectItem>
+                    <SelectItem value="mixto">Mixto (Efectivo + Transferencia)</SelectItem>
+                  </SelectContent>
+                </Select>
+                {metodoPago === 'mixto' && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
+                    <div>
+                      <Label htmlFor="mixto-efectivo-dialog">Efectivo</Label>
+                      <Input
+                        id="mixto-efectivo-dialog"
+                        type="number"
+                        inputMode="decimal"
+                        min={0}
+                        step={0.01}
+                        value={mixtoEfectivo}
+                        onChange={(e) => setMixtoEfectivo(e.target.value)}
+                        placeholder="0.00"
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="mixto-transfer-dialog">Transferencia</Label>
+                      <Input
+                        id="mixto-transfer-dialog"
+                        type="number"
+                        inputMode="decimal"
+                        min={0}
+                        step={0.01}
+                        value={mixtoTransferencia}
+                        onChange={(e) => setMixtoTransferencia(e.target.value)}
+                        placeholder="0.00"
+                      />
+                    </div>
+                    <div className="sm:col-span-2 text-xs text-gray-600">
+                      Suma: ${(Number(mixtoEfectivo||0)+Number(mixtoTransferencia||0)).toLocaleString()} / Total: ${total.toLocaleString()}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setIsEditSaleInfoOpen(false)}>Cerrar</Button>
-            <Button onClick={() => setIsEditSaleInfoOpen(false)}>Guardar</Button>
+            <Button
+              variant="outline"
+              onClick={() => {
+                ignoreNextEnterSpaceUntilRef.current = Date.now() + 250;
+                setIsEditSaleInfoOpen(false);
+                setTimeout(() => processBtnRef.current?.focus(), 0);
+              }}
+            >Cerrar</Button>
+            <Button
+              onClick={() => {
+                if ((metodoPago || 'efectivo') === 'mixto') {
+                  const ef = Number(mixtoEfectivo || 0);
+                  const tr = Number(mixtoTransferencia || 0);
+                  const suma = Number((ef + tr).toFixed(2));
+                  const totalRounded = Number(total.toFixed(2));
+                  if (suma !== totalRounded) {
+                    showAlert(`La suma de efectivo y transferencia debe ser igual al total ($${totalRounded.toLocaleString()}).`, 'error');
+                    return;
+                  }
+                }
+                ignoreNextEnterSpaceUntilRef.current = Date.now() + 250;
+                setIsEditSaleInfoOpen(false);
+                setTimeout(() => processBtnRef.current?.focus(), 0);
+              }}
+            >Guardar</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -1249,10 +1543,35 @@ export default function RealizarVentaPage() {
                         value={productSearchTerm}
                         ref={productInputRef}
                         onKeyDown={(e) => {
+                          const list = productSuggestions(debouncedProductTerm);
+                          if (e.key === 'ArrowDown') {
+                            e.preventDefault();
+                            setShowProductSuggestions(true);
+                            setProductActiveIndex((prev) => Math.min(prev + 1, list.length - 1));
+                            return;
+                          }
+                          if (e.key === 'ArrowUp') {
+                            e.preventDefault();
+                            setProductActiveIndex((prev) => Math.max(prev - 1, -1));
+                            return;
+                          }
                           if (e.key === 'Enter') {
                             e.preventDefault();
-                            // Elegir siempre la mejor coincidencia (o primera sugerencia si el dropdown está abierto)
-                            const match = bestMatchProducto(productSearchTerm) || productSuggestions(productSearchTerm)[0];
+                            if (productActiveIndex >= 0 && productActiveIndex < list.length) {
+                              const chosen = list[productActiveIndex];
+                              setProductoSeleccionadoId(chosen.id);
+                              setProductSearchTerm(`${chosen.nombre} (${chosen.codigo})`);
+                              setShowProductSuggestions(false);
+                              setTimeout(() => {
+                                if (chosen.unidad_medida && ['unidad', 'unidades'].includes(chosen.unidad_medida)) {
+                                  setUnidadMedida('unidades');
+                                  setCantidad((prev) => prev || '1');
+                                }
+                                cantidadInputRef.current?.focus();
+                              }, 0);
+                              return;
+                            }
+                            const match = bestMatchProducto(debouncedProductTerm) || list[0];
                             if (match) {
                               setProductoSeleccionadoId(match.id);
                               setProductSearchTerm(`${match.nombre} (${match.codigo})`);
@@ -1300,10 +1619,12 @@ export default function RealizarVentaPage() {
                       {/* Lista de sugerencias */}
                       {showProductSuggestions && (
                         <div className="absolute z-50 w-full mt-1 bg-white border border-gray-200 rounded-md shadow-lg max-h-60 overflow-y-auto">
-                          {productSuggestions(productSearchTerm).map((producto) => (
+                          {productSuggestions(debouncedProductTerm).map((producto, idx) => (
                             <div
                               key={producto.id}
-                              className="p-3 hover:bg-gray-50 cursor-pointer border-b border-gray-100 last:border-b-0"
+                              className={`p-3 hover:bg-gray-50 cursor-pointer border-b border-gray-100 last:border-b-0 ${idx === productActiveIndex ? 'bg-gray-100' : ''}`}
+                              onMouseEnter={() => setProductActiveIndex(idx)}
+                              ref={idx === productActiveIndex ? (el) => { productActiveElRef.current = el } : undefined}
                               onClick={() => {
                                 setProductoSeleccionadoId(producto.id);
                                 setProductSearchTerm(`${producto.nombre} (${producto.codigo})`);
@@ -1327,7 +1648,7 @@ export default function RealizarVentaPage() {
                     </div>
                     {selectedProduct && (
                       <p className="text-sm text-gray-500 mt-1">
-                        Precio: ${(selectedProduct.precio ?? 0).toLocaleString()} | Stock disponible: {selectedProduct.stock} {selectedProduct.unidad_medida}
+                        Precio: ${(selectedProduct?.precio ?? 0).toLocaleString()} | Stock disponible: {selectedProduct?.stock ?? 0} {selectedProduct?.unidad_medida ?? ''}
                       </p>
                     )}
                   </div>
@@ -1345,19 +1666,19 @@ export default function RealizarVentaPage() {
                         <SelectContent>
                           <SelectItem 
                             value="unidades" 
-                            disabled={!selectedProduct || !['unidades', 'unidad'].includes(selectedProduct.unidad_medida)}
+                            disabled={!selectedProduct || !['unidades', 'unidad'].includes(selectedProduct?.unidad_medida as any)}
                           >
                             Unidades
                           </SelectItem>
                           <SelectItem 
                             value="kg" 
-                            disabled={!selectedProduct || !['kg', 'gramos', 'kilogramo'].includes(selectedProduct.unidad_medida)}
+                            disabled={!selectedProduct || !['kg', 'gramos', 'kilogramo'].includes(selectedProduct?.unidad_medida as any)}
                           >
                             Kg
                           </SelectItem>
                           <SelectItem 
                             value="gramos" 
-                            disabled={!selectedProduct || !['kg', 'gramos', 'kilogramo'].includes(selectedProduct.unidad_medida)}
+                            disabled={!selectedProduct || !['kg', 'gramos', 'kilogramo'].includes(selectedProduct?.unidad_medida as any)}
                           >
                             Gramos
                           </SelectItem>

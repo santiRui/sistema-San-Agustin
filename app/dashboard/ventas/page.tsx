@@ -30,7 +30,10 @@ interface VentaProcesada {
     items: number;
     total: number;
     estado: "completada" | "pendiente" | "cancelada";
-    metodoPago: string;
+    metodoPago: string; // texto para mostrar
+    metodoPagoRaw: string; // valor crudo de BD (efectivo, transferencia, tarjeta_*, mixto)
+    mixtoEfectivo?: number;
+    mixtoTransferencia?: number;
 }
 
 interface DetalleVenta {
@@ -51,7 +54,7 @@ export default function VentasHechasPage() {
   const canDelete = role !== "empleado"; // administrador y encargado pueden eliminar
 
   const [searchTerm, setSearchTerm] = useState("")
-  const [filterEstado, setFilterEstado] = useState<string>("todos")
+  const [filterMedio, setFilterMedio] = useState<string>("todos")
   const [selectedDate, setSelectedDate] = useState<Date | undefined>(undefined)
   const [selectedMonth, setSelectedMonth] = useState<number | undefined>(undefined)
   const [selectedYear, setSelectedYear] = useState<number | undefined>(undefined)
@@ -72,36 +75,88 @@ export default function VentasHechasPage() {
   useEffect(() => {
     const fetchVentas = async () => {
       setLoading(true);
-      const { data, error } = await supabase
-        .from('ventas')
-        .select(`
-          id,
-          created_at,
-          monto_total,
-          estado,
-          metodo_pago,
-          clientes ( nombre, apellido ),
-          detalles_ventas ( id )
-        `)
-        .order('created_at', { ascending: false });
+      try {
+        // Intento 1: con columnas de mixto
+        let data: any[] | null = null;
+        let err1: any = null;
+        const res1 = await supabase
+          .from('ventas')
+          .select(`
+            id,
+            created_at,
+            monto_total,
+            estado,
+            metodo_pago,
+            mixto_efectivo,
+            mixto_transferencia,
+            monto_efectivo,
+            monto_transferencia,
+            clientes ( nombre, apellido ),
+            detalles_ventas ( id )
+          `)
+          .order('created_at', { ascending: false });
+        data = res1.data as any[] | null;
+        err1 = res1.error;
 
-      if (error) {
-        showAlert('Error al cargar las ventas', 'error');
-        console.error(error);
-      } else {
-        const ventasProcesadas: VentaProcesada[] = data.map((venta: any) => ({
+        if (err1) {
+          // Intento 2: sin columnas mixto_* por compatibilidad
+          const res2 = await supabase
+            .from('ventas')
+            .select(`
+              id,
+              created_at,
+              monto_total,
+              estado,
+              metodo_pago,
+              monto_efectivo,
+              monto_transferencia,
+              clientes ( nombre, apellido ),
+              detalles_ventas ( id )
+            `)
+            .order('created_at', { ascending: false });
+          data = res2.data as any[] | null;
+          if (res2.error) {
+            console.error('Error ventas (fallback):', res2.error);
+            showAlert('Error al cargar las ventas (fallback)', 'error');
+            setSales([]);
+            setLoading(false);
+            return;
+          }
+        }
+
+        // Mapear resultados
+        const ventasProcesadas: VentaProcesada[] = (data || []).map((venta: any) => {
+          const raw = (venta.metodo_pago as string) || 'efectivo';
+          const mixEf = Number(venta.mixto_efectivo ?? venta.monto_efectivo ?? 0);
+          const mixTr = Number(venta.mixto_transferencia ?? venta.monto_transferencia ?? 0);
+          const isMixtoByAmounts = mixEf > 0 || mixTr > 0;
+          const rawNormalized = raw === 'mixto' ? 'mixto' : (isMixtoByAmounts ? 'mixto' : raw);
+          const pretty = raw.replace('_', ' ').replace(/\b\w/g, (l: string) => l.toUpperCase());
+          const detalles = Array.isArray(venta.detalles_ventas)
+            ? venta.detalles_ventas
+            : (venta.detalles_ventas ? [venta.detalles_ventas] : []);
+          return {
             id: venta.id,
             fecha: format(new Date(venta.created_at), "dd/MM/yyyy HH:mm", { locale: es }),
             fechaDate: new Date(venta.created_at),
             cliente: venta.clientes ? `${venta.clientes.nombre} ${venta.clientes.apellido}` : "Cliente no disponible",
-            items: venta.detalles_ventas.length,
-            total: venta.monto_total,
-            estado: venta.estado,
-            metodoPago: venta.metodo_pago.replace('_', ' ').replace(/\b\w/g, (l: string) => l.toUpperCase()),
-        }));
+            items: detalles.length,
+            total: Number(venta.monto_total) || 0,
+            estado: (venta.estado as any) || 'completada',
+            metodoPago: rawNormalized.replace('_', ' ').replace(/\b\w/g, (l: string) => l.toUpperCase()),
+            metodoPagoRaw: rawNormalized,
+            mixtoEfectivo: rawNormalized === 'mixto' ? mixEf : undefined,
+            mixtoTransferencia: rawNormalized === 'mixto' ? mixTr : undefined,
+          } as VentaProcesada;
+        });
         setSales(ventasProcesadas);
+      } catch (e: any) {
+        console.error('Error ventas (fatal):', e?.message || e);
+        showAlert(`Error al cargar las ventas: ${e?.message || 'desconocido'}`, 'error');
+        setSales([]);
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
     };
 
     fetchVentas();
@@ -231,7 +286,7 @@ export default function VentasHechasPage() {
       sale.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
       sale.cliente.toLowerCase().includes(searchTerm.toLowerCase())
 
-    const matchesFilter = filterEstado === "todos" || sale.estado === filterEstado
+    const matchesFilter = filterMedio === "todos" || sale.metodoPagoRaw === filterMedio || (filterMedio === 'tarjeta' && sale.metodoPagoRaw?.startsWith('tarjeta'))
 
     const matchesDate =
       !selectedDate ||
@@ -468,15 +523,16 @@ export default function VentasHechasPage() {
               />
             </div>
             <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
-              <Select value={filterEstado} onValueChange={setFilterEstado}>
-                <SelectTrigger className="w-full sm:w-[180px]">
-                  <SelectValue placeholder="Filtrar por estado" />
+              <Select value={filterMedio} onValueChange={setFilterMedio}>
+                <SelectTrigger className="w-full sm:w-[200px]">
+                  <SelectValue placeholder="Filtrar por medio de pago" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="todos">Todos los estados</SelectItem>
-                  <SelectItem value="completada">Completadas</SelectItem>
-                  <SelectItem value="pendiente">Pendientes</SelectItem>
-                  <SelectItem value="cancelada">Canceladas</SelectItem>
+                  <SelectItem value="todos">Todos los medios</SelectItem>
+                  <SelectItem value="efectivo">Efectivo</SelectItem>
+                  <SelectItem value="transferencia">Transferencia</SelectItem>
+                  <SelectItem value="mixto">Mixto</SelectItem>
+                  <SelectItem value="tarjeta">Tarjeta</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -569,7 +625,18 @@ export default function VentasHechasPage() {
                     <TableCell className="truncate max-w-[120px]">{sale.cliente}</TableCell>
                     <TableCell className="hidden sm:table-cell">{sale.items} items</TableCell>
                     <TableCell className="font-semibold">${sale.total.toLocaleString()}</TableCell>
-                    <TableCell className="hidden md:table-cell">{sale.metodoPago}</TableCell>
+                    <TableCell className="hidden md:table-cell">
+                      {sale.metodoPagoRaw === 'mixto' ? (
+                        <div>
+                          <div className="font-medium">Mixto</div>
+                          <div className="text-xs text-gray-600">
+                            ${ (sale.mixtoEfectivo ?? 0).toLocaleString() } efectivo + ${ (sale.mixtoTransferencia ?? 0).toLocaleString() } transferencia
+                          </div>
+                        </div>
+                      ) : (
+                        sale.metodoPago
+                      )}
+                    </TableCell>
                     <TableCell>
                       <Badge
                         variant={
@@ -677,7 +744,18 @@ export default function VentasHechasPage() {
                     <div className="sm:col-span-3">{selectedVenta.fecha}</div>
 
                     <div className="font-semibold">Método de Pago:</div>
-                    <div className="sm:col-span-3">{selectedVenta.metodoPago}</div>
+                    <div className="sm:col-span-3">
+                      {selectedVenta.metodoPagoRaw === 'mixto' ? (
+                        <div>
+                          <div className="font-medium">Mixto</div>
+                          <div className="text-xs text-gray-600">
+                            ${ (selectedVenta.mixtoEfectivo ?? 0).toLocaleString() } efectivo + ${ (selectedVenta.mixtoTransferencia ?? 0).toLocaleString() } transferencia
+                          </div>
+                        </div>
+                      ) : (
+                        selectedVenta.metodoPago
+                      )}
+                    </div>
                 </div>
               <div className="overflow-x-auto">
                 <Table>
