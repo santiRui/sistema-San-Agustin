@@ -31,7 +31,7 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
-import { Plus, Edit, Trash2, Search, Package } from "lucide-react"
+import { Plus, Edit, Trash2, Search, Package, FileText } from "lucide-react"
 import { BreadcrumbNav } from "@/components/breadcrumb-nav"
 import { useAlert } from "@/components/AlertProvider"
 
@@ -65,7 +65,14 @@ export default function ProductosPage() {
   const [searchTerm, setSearchTerm] = useState("");
   const [lowStockFilter, setLowStockFilter] = useState(false);
   const { showAlert } = useAlert();
-  
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyItems, setHistoryItems] = useState<Array<{ ventaId: string; fecha: string; ts: number; cantidad: number; unidad: string; precio: number; subtotal: number }>>([]);
+  const [historyProduct, setHistoryProduct] = useState<Producto | null>(null);
+  const [filterFromDate, setFilterFromDate] = useState<string>("");
+  const [filterToDate, setFilterToDate] = useState<string>("");
+  const [filterFromTime, setFilterFromTime] = useState<string>("");
+  const [filterToTime, setFilterToTime] = useState<string>("");
 
   const fetchProductos = async () => {
     setIsLoading(true);
@@ -112,6 +119,68 @@ export default function ProductosPage() {
     return 2; // resto
   };
 
+  const openHistory = async (product: Producto) => {
+    if (!product?.id) return;
+    setHistoryProduct(product);
+    setIsHistoryOpen(true);
+    setHistoryLoading(true);
+    // Reset filtros al abrir
+    setFilterFromDate("");
+    setFilterToDate("");
+    setFilterFromTime("");
+    setFilterToTime("");
+    try {
+      const { data, error } = await supabase
+        .from('detalles_ventas')
+        .select(`cantidad, unidad_medida, precio_unitario, subtotal, ventas ( id, created_at )` as any)
+        .eq('id_producto', product.id)
+        .order('id', { ascending: false });
+      if (error) {
+        showAlert('Error al cargar historial: ' + error.message, 'error');
+        setHistoryItems([]);
+      } else {
+        const items = (data || []).map((row: any) => {
+          const created = Array.isArray(row.ventas) ? row.ventas[0]?.created_at : row.ventas?.created_at;
+          const ts = created ? new Date(created).getTime() : 0;
+          return {
+            ventaId: (Array.isArray(row.ventas) ? row.ventas[0]?.id : row.ventas?.id) || '',
+            fecha: created ? new Date(created).toLocaleString('es-AR') : '',
+            ts,
+            cantidad: Number(row.cantidad || 0),
+            unidad: String(row.unidad_medida || ''),
+            precio: Number(row.precio_unitario || 0),
+            subtotal: Number(row.subtotal || 0),
+          };
+        });
+        items.sort((a: any, b: any) => b.ts - a.ts);
+        setHistoryItems(items);
+      }
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  const filteredHistoryItems = (() => {
+    if (historyItems.length === 0) return [] as typeof historyItems;
+    let fromTs: number | null = null;
+    let toTs: number | null = null;
+    if (filterFromDate) {
+      const [y, m, d] = filterFromDate.split('-').map(Number);
+      const [hh = 0, mm = 0] = (filterFromTime || '00:00').split(':').map(Number);
+      fromTs = new Date(y, (m || 1) - 1, d || 1, hh, mm, 0).getTime();
+    }
+    if (filterToDate) {
+      const [y, m, d] = filterToDate.split('-').map(Number);
+      const [hh = 23, mm = 59] = (filterToTime || '23:59').split(':').map(Number);
+      toTs = new Date(y, (m || 1) - 1, d || 1, hh, mm, 59).getTime();
+    }
+    return historyItems.filter(it => {
+      if (fromTs !== null && it.ts < fromTs) return false;
+      if (toTs !== null && it.ts > toTs) return false;
+      return true;
+    });
+  })();
+
   const filteredProducts = productos
     .filter((product) => {
       const nombre = normalize(product.nombre);
@@ -156,7 +225,7 @@ export default function ProductosPage() {
     setIsDialogOpen(true);
   };
 
-      const handleSaveProduct = async () => {
+  const handleSaveProduct = async () => {
     if (!formData.nombre || !formData.id_categoria) {
       showAlert('Nombre y categoría son campos obligatorios.', 'error');
       return;
@@ -186,7 +255,7 @@ export default function ProductosPage() {
     }
   };
 
-    const handleDeleteProduct = async (id: string | undefined) => {
+  const handleDeleteProduct = async (id: string | undefined) => {
     if (!id) {
       showAlert('No se puede eliminar un producto sin ID.', 'error');
       return;
@@ -380,6 +449,9 @@ export default function ProductosPage() {
                   {canManageProducts && (
                     <TableCell>
                       <div className="flex items-center gap-2">
+                        <Button variant="outline" size="icon" onClick={() => openHistory(producto)}>
+                          <FileText className="h-4 w-4" />
+                        </Button>
                         <Button variant="outline" size="icon" onClick={() => handleOpenDialog(producto)}>
                           <Edit className="h-4 w-4" />
                         </Button>
@@ -419,6 +491,73 @@ export default function ProductosPage() {
           </Table>
         </CardContent>
       </Card>
+
+      <Dialog open={isHistoryOpen} onOpenChange={setIsHistoryOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Historial de ventas — {historyProduct?.nombre || ''}</DialogTitle>
+            <DialogDescription>Listado de cantidades vendidas con fecha y hora</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
+              <div>
+                <Label>Desde (fecha)</Label>
+                <Input type="date" value={filterFromDate} onChange={(e) => setFilterFromDate(e.target.value)} />
+              </div>
+              <div>
+                <Label>Desde (hora)</Label>
+                <Input type="time" value={filterFromTime} onChange={(e) => setFilterFromTime(e.target.value)} />
+              </div>
+              <div>
+                <Label>Hasta (fecha)</Label>
+                <Input type="date" value={filterToDate} onChange={(e) => setFilterToDate(e.target.value)} />
+              </div>
+              <div>
+                <Label>Hasta (hora)</Label>
+                <Input type="time" value={filterToTime} onChange={(e) => setFilterToTime(e.target.value)} />
+              </div>
+            </div>
+            <div className="flex justify-end">
+              <Button variant="outline" onClick={() => { setFilterFromDate(""); setFilterFromTime(""); setFilterToDate(""); setFilterToTime(""); }}>Limpiar filtros</Button>
+            </div>
+            {historyLoading ? (
+              <div className="py-8 text-center text-gray-500">Cargando...</div>
+            ) : filteredHistoryItems.length === 0 ? (
+              <div className="py-8 text-center text-gray-500">Sin registros de ventas</div>
+            ) : (
+              <div className="max-h-[60vh] overflow-y-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Fecha y hora</TableHead>
+                      <TableHead className="text-right">Cantidad</TableHead>
+                      <TableHead>Unidad</TableHead>
+                      <TableHead className="text-right">Precio</TableHead>
+                      <TableHead className="text-right">Subtotal</TableHead>
+                      <TableHead>Venta</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {filteredHistoryItems.map((it, idx) => (
+                      <TableRow key={idx}>
+                        <TableCell className="font-mono text-xs">{it.fecha}</TableCell>
+                        <TableCell className="text-right">{it.cantidad}</TableCell>
+                        <TableCell>{it.unidad}</TableCell>
+                        <TableCell className="text-right">${it.precio.toLocaleString()}</TableCell>
+                        <TableCell className="text-right">${it.subtotal.toLocaleString()}</TableCell>
+                        <TableCell className="font-mono text-xs">{it.ventaId || '-'}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsHistoryOpen(false)}>Cerrar</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
