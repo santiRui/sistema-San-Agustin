@@ -27,6 +27,27 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
   const [role, setRole] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
+  const getRoleFromUser = (u: User | null) => {
+    if (!u) return null;
+    const um: any = (u as any).user_metadata || {};
+    const am: any = (u as any).app_metadata || {};
+    return (um.role || am.role || um.rol || am.rol || null) as string | null;
+  };
+
+  const fetchRole = async (u: User | null) => {
+    if (!u) return null;
+    const { data, error } = await supabase.rpc('get_user_role');
+    if (error) {
+      const msg = String((error as any).message || '');
+      const code = String((error as any).code || '');
+      if (code === 'PGRST202' || msg.toLowerCase().includes('not found')) {
+        return getRoleFromUser(u);
+      }
+      return getRoleFromUser(u);
+    }
+    return (data as any) ?? getRoleFromUser(u);
+  };
+
   useEffect(() => {
     const fetchSession = async () => {
       const { data: { session } } = await supabase.auth.getSession();
@@ -34,7 +55,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       setUser(session?.user ?? null);
 
       if (session?.user) {
-        const { data: userRole } = await supabase.rpc('get_user_role');
+        const userRole = await fetchRole(session.user);
         setRole(userRole);
       }
       setIsLoading(false);
@@ -46,7 +67,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       setSession(session);
       setUser(session?.user ?? null);
       if (session?.user) {
-        const { data: userRole } = await supabase.rpc('get_user_role');
+        const userRole = await fetchRole(session.user);
         setRole(userRole);
       } else {
         setRole(null);

@@ -19,6 +19,27 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null)
   const router = useRouter()
 
+  const getRoleFromUser = (u: any) => {
+    if (!u) return null;
+    const um = u.user_metadata || {};
+    const am = u.app_metadata || {};
+    return (um.role || am.role || um.rol || am.rol || null) as string | null;
+  };
+
+  const fetchRoleSafe = async (u: any) => {
+    if (!u) return null;
+    const { data, error } = await supabase.rpc('get_user_role');
+    if (error) {
+      const msg = String((error as any).message || '');
+      const code = String((error as any).code || '');
+      if (code === 'PGRST202' || msg.toLowerCase().includes('not found')) {
+        return getRoleFromUser(u);
+      }
+      return getRoleFromUser(u);
+    }
+    return (data as any) ?? getRoleFromUser(u);
+  };
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
@@ -40,9 +61,9 @@ export default function LoginPage() {
       }
 
       // 2. Validar el rol del usuario llamando a la función de base de datos
-      const { data: role, error: rpcError } = await supabase.rpc('get_user_role');
+      const role = await fetchRoleSafe(authData.user);
 
-      if (rpcError || !role) {
+      if (!role) {
         // Si la función falla o no devuelve un rol, cerramos la sesión
         await supabase.auth.signOut();
         throw new Error("Usuario no autorizado o sin rol asignado.");
