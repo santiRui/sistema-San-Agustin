@@ -1,0 +1,4 @@
+id_usuario,rol,fecha_creacion,correo,nombre completo,contraseña
+9e8db7b3-fe3f-4cfc-93c4-0fe96d30d884,empleado,2025-08-04 16:03:45+00,empleado@gmail.com,empleado,12123
+604451ea-8c68-4f29-90c0-5c694424876f,administrador,2025-08-04 15:45:09+00,santiago.ruiz1103@gmail.com,Ruiz Fernandez Santiago Daniel,142357CyS2007
+0fa8fd29-8f0b-4faf-9f63-cc38fd93c108,encargado,2025-08-04 16:02:39+00,encargado@gmail.com,encargado,78789
