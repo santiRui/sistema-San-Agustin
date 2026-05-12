@@ -106,6 +106,10 @@ export default function RealizarVentaPage() {
   const selectedProduct = productos.find(p => p.id === productoSeleccionadoId);
 
   useEffect(() => {
+    setTimeout(() => productInputRef.current?.focus(), 0);
+  }, []);
+
+  useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const now = Date.now();
       if ((e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') && now < (ignoreNextEnterSpaceUntilRef.current || 0)) {
@@ -161,6 +165,8 @@ export default function RealizarVentaPage() {
         }
       }
       if (!metodoPago) setMetodoPago('efectivo');
+
+      setTimeout(() => productInputRef.current?.focus(), 0);
     }
     fetchData();
   }, []);
@@ -483,6 +489,8 @@ export default function RealizarVentaPage() {
       setProductSearchTerm("");
       setUnidadMedida('unidades');
       setCantidad("");
+
+      setTimeout(() => productInputRef.current?.focus(), 0);
 
       showAlert('Venta procesada exitosamente. Listo para iniciar una nueva venta.', 'success');
 
